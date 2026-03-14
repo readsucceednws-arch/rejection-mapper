@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useReportSummary } from "@/hooks/use-reports";
 import { usePartWiseAnalytics, useMonthWiseAnalytics, useCostAnalytics, useZoneWiseAnalytics } from "@/hooks/use-analytics";
 import { useParts } from "@/hooks/use-parts";
@@ -56,6 +56,22 @@ interface DateRange {
 
 interface TabFilters {
   type?: string;
+}
+
+type ZoneTimePreset = "all" | "7d" | "30d" | "90d";
+type ZoneChartMode = "bar" | "line" | "both";
+
+function toISODate(date: Date): string {
+  return date.toISOString().split("T")[0];
+}
+
+function getPresetDateRange(preset: ZoneTimePreset): DateRange {
+  if (preset === "all") return {};
+  const end = new Date();
+  const start = new Date(end);
+  const days = preset === "7d" ? 6 : preset === "30d" ? 29 : 89;
+  start.setDate(end.getDate() - days);
+  return { startDate: toISODate(start), endDate: toISODate(end) };
 }
 
 function GlobalDateBar({
@@ -145,6 +161,9 @@ function TabFilterBar({
   extraChildren?: React.ReactNode;
 }) {
   const [local, setLocal] = useState<TabFilters>(filters);
+  useEffect(() => {
+    setLocal(filters);
+  }, [filters]);
   if (!showTypeFilter && !extraChildren) return null;
 
   const apply = () => onApply(local);
@@ -198,12 +217,14 @@ export default function Dashboard() {
   const [selectedPartNumbers, setSelectedPartNumbers] = useState<string[]>([]);
   const [selectedCostPart, setSelectedCostPart] = useState<string>("all");
   const [rejectionSearch, setRejectionSearch] = useState("");
+  const [zoneTimePreset, setZoneTimePreset] = useState<ZoneTimePreset>("all");
+  const [zoneChartMode, setZoneChartMode] = useState<ZoneChartMode>("both");
 
   const overviewFilters = useMemo(() => ({ ...globalDates }), [globalDates]);
   const partFilters = useMemo(() => ({ ...globalDates, ...partTabFilters }), [globalDates, partTabFilters]);
   const monthFilters = useMemo(() => ({ ...globalDates, ...monthTabFilters }), [globalDates, monthTabFilters]);
   const costFilters = useMemo(() => ({ ...globalDates }), [globalDates]);
-  const zoneFilters = useMemo(() => ({ ...globalDates }), [globalDates]);
+  const zoneFilters = useMemo(() => ({ ...getPresetDateRange(zoneTimePreset), ...globalDates }), [globalDates, zoneTimePreset]);
 
   const { data: summary, isLoading: isLoadingSummary } = useReportSummary(overviewFilters);
   const { data: overviewPartData, isLoading: isLoadingOverviewParts } = usePartWiseAnalytics(overviewFilters);
@@ -258,11 +279,24 @@ export default function Dashboard() {
     return partData.filter((p) => selectedPartNumbers.includes(p.partNumber));
   }, [partData, selectedPartNumbers]);
 
-  const filteredCostTableData = useMemo(() => {
+  const normalizedCostData = useMemo(() => {
     if (!costData) return [];
-    if (selectedCostPart === "all") return costData;
-    return costData.filter((r) => r.partNumber === selectedCostPart);
-  }, [costData, selectedCostPart]);
+    return costData.map((row) => ({
+      ...row,
+      price: Number(row.price) || 0,
+      rejectionQty: Number(row.rejectionQty) || 0,
+      reworkQty: Number(row.reworkQty) || 0,
+      rejectionCost: Number(row.rejectionCost) || 0,
+      reworkCost: Number(row.reworkCost) || 0,
+      totalCost: Number(row.totalCost) || 0,
+    }));
+  }, [costData]);
+
+  const filteredCostTableData = useMemo(() => {
+    if (!normalizedCostData.length) return [];
+    if (selectedCostPart === "all") return normalizedCostData;
+    return normalizedCostData.filter((r) => r.partNumber === selectedCostPart);
+  }, [normalizedCostData, selectedCostPart]);
 
   const totalRejectionCost = filteredCostTableData.reduce((s, r) => s + r.rejectionCost, 0);
   const totalReworkCost = filteredCostTableData.reduce((s, r) => s + r.reworkCost, 0);
@@ -814,15 +848,15 @@ export default function Dashboard() {
           <Card className="shadow-sm border-border/50">
             <CardHeader>
               <CardTitle>Cost by Part</CardTitle>
-              <CardDescription>Stacked bars showing rejection cost (red) vs rework cost (blue) per part</CardDescription>
+              <CardDescription>Stacked bars showing rejection cost (red) vs rework cost (blue) per part for current selection</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="h-[420px] w-full">
                 {isLoadingCost ? (
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
-                ) : costData && costData.length > 0 ? (
+                ) : filteredCostTableData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={costData} margin={{ top: 10, right: 20, left: 10, bottom: 60 }}>
+                    <BarChart data={filteredCostTableData} margin={{ top: 10, right: 20, left: 10, bottom: 60 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                       <XAxis dataKey="partNumber" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} angle={-40} textAnchor="end" height={70} />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${v.toLocaleString("en-IN")}`} />
@@ -831,7 +865,7 @@ export default function Dashboard() {
                         contentStyle={{ borderRadius: "8px", border: "1px solid hsl(var(--border))" }}
                         formatter={(value: number, name) => [fmt(value), name === "rejectionCost" ? "Rejection Cost" : "Rework Cost"]}
                         labelFormatter={(label) => {
-                          const part = costData.find((p) => p.partNumber === label);
+                          const part = filteredCostTableData.find((p) => p.partNumber === label);
                           return `${label}${part?.description ? ` — ${part.description}` : ""} (₹${part?.price}/unit)`;
                         }}
                       />
@@ -917,9 +951,40 @@ export default function Dashboard() {
 
         {/* ── TAB 5: ZONE ANALYSIS ── */}
         <TabsContent value="zone" className="space-y-6">
+          <Card className="p-3 flex flex-wrap items-end gap-3 border-border/50 bg-muted/20 shadow-sm">
+            <div className="grid gap-1">
+              <Label className="text-xs text-muted-foreground">Time Window</Label>
+              <Select value={zoneTimePreset} onValueChange={(v: ZoneTimePreset) => setZoneTimePreset(v)}>
+                <SelectTrigger className="h-8 text-xs w-[160px]">
+                  <SelectValue placeholder="All Time" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Time</SelectItem>
+                  <SelectItem value="7d">Last 7 Days</SelectItem>
+                  <SelectItem value="30d">Last 30 Days</SelectItem>
+                  <SelectItem value="90d">Last 90 Days</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1">
+              <Label className="text-xs text-muted-foreground">Graph Type</Label>
+              <Select value={zoneChartMode} onValueChange={(v: ZoneChartMode) => setZoneChartMode(v)}>
+                <SelectTrigger className="h-8 text-xs w-[160px]">
+                  <SelectValue placeholder="Both" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="both">Bar + Line</SelectItem>
+                  <SelectItem value="bar">Bar Only</SelectItem>
+                  <SelectItem value="line">Line Only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </Card>
+
+          {(zoneChartMode === "bar" || zoneChartMode === "both") && (
           <Card className="shadow-sm border-border/50">
             <CardHeader>
-              <CardTitle>Quantity by Zone</CardTitle>
+              <CardTitle>Zone Analysis (Bar)</CardTitle>
               <CardDescription>Total rejections and reworks grouped by zone</CardDescription>
             </CardHeader>
             <CardContent>
@@ -948,6 +1013,41 @@ export default function Dashboard() {
               </div>
             </CardContent>
           </Card>
+          )}
+
+          {(zoneChartMode === "line" || zoneChartMode === "both") && (
+          <Card className="shadow-sm border-border/50">
+            <CardHeader>
+              
+              <CardTitle>Zone Analysis (Line)</CardTitle>
+              <CardDescription>Line view of rejections and reworks by zone</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[380px] w-full">
+                {isLoadingZone ? (
+                  <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
+                ) : zoneData && zoneData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={zoneData} margin={{ top: 10, right: 20, left: -10, bottom: 40 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                      <XAxis dataKey="zone" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} angle={-30} textAnchor="end" height={55} />
+                      <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+                      <Tooltip
+                        contentStyle={{ borderRadius: "8px", border: "1px solid hsl(var(--border))" }}
+                        formatter={(value, name) => [value, name === "rejections" ? "Rejections" : "Reworks"]}
+                      />
+                      <Legend formatter={(value) => <span className="text-xs capitalize">{value === "rejections" ? "Rejections" : "Reworks"}</span>} />
+                      <Line type="monotone" dataKey="rejections" name="rejections" stroke={REJECTION_COLOR} strokeWidth={2} dot={{ r: 4, fill: REJECTION_COLOR }} />
+                      <Line type="monotone" dataKey="reworks" name="reworks" stroke={REWORK_COLOR} strokeWidth={2} dot={{ r: 4, fill: REWORK_COLOR }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full flex items-center justify-center text-muted-foreground">No data available for selected filters</div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+          )}
 
           {zoneData && zoneData.length > 0 && (
             <Card className="shadow-sm border-border/50">
