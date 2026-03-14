@@ -9,7 +9,6 @@ import { useParts } from "@/hooks/use-parts";
 import { useRejectionTypes } from "@/hooks/use-rejection-types";
 import { useReworkTypes } from "@/hooks/use-rework-types";
 import { useCreateRejectionEntry } from "@/hooks/use-rejection-entries";
-import { useZones } from "@/hooks/use-zones";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -43,7 +42,6 @@ interface EntryItem {
   purpose: "rejection" | "rework";
   rejectionTypeId: number;
   quantity: number;
-  zoneId?: number;
 }
 
 const formSchema = z.object({
@@ -88,7 +86,6 @@ export default function LogEntry() {
     purpose: "rejection",
     rejectionTypeId: 0,
     quantity: 1,
-    zoneId: undefined,
   });
   const [refOpen, setRefOpen] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -97,7 +94,6 @@ export default function LogEntry() {
   const { data: parts, isLoading: isLoadingParts } = useParts();
   const { data: rejectionTypes, isLoading: isLoadingTypes } = useRejectionTypes();
   const { data: reworkTypes } = useReworkTypes();
-  const { data: zones } = useZones();
   const createMutation = useCreateRejectionEntry();
 
   const form = useForm<FormValues>({
@@ -117,7 +113,7 @@ export default function LogEntry() {
       return;
     }
     setEntries([...entries, { ...newEntry, id: Date.now().toString() }]);
-    setNewEntry({ purpose: "rejection", rejectionTypeId: 0, quantity: 1, zoneId: undefined });
+    setNewEntry({ purpose: "rejection", rejectionTypeId: 0, quantity: 1 });
   };
 
   const removeEntry = (id: string) => {
@@ -134,7 +130,7 @@ export default function LogEntry() {
       for (const entry of entries) {
         await new Promise((resolve, reject) => {
           createMutation.mutate(
-            { partId: data.partId, rejectionTypeId: entry.rejectionTypeId, quantity: entry.quantity, remarks: data.remarks, zoneId: entry.zoneId ?? null },
+            { partId: data.partId, rejectionTypeId: entry.rejectionTypeId, quantity: entry.quantity, remarks: data.remarks },
             { onSuccess: resolve, onError: reject }
           );
         });
@@ -312,13 +308,8 @@ export default function LogEntry() {
                               {displayReason && <span className="text-muted-foreground text-xs">— {displayReason}</span>}
                               <span className="text-muted-foreground text-xs">({entry.purpose})</span>
                             </div>
-                            <div className="text-sm text-muted-foreground flex items-center gap-2">
+                            <div className="text-sm text-muted-foreground">
                               <span>Qty: {entry.quantity}</span>
-                              {entry.zoneId && zones && (
-                                <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/30">
-                                  {zones.find(z => z.id === entry.zoneId)?.name ?? "Zone"}
-                                </Badge>
-                              )}
                             </div>
                           </div>
                           <Button
@@ -379,26 +370,6 @@ export default function LogEntry() {
                                 </SelectItem>
                               ))
                           }
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div>
-                      <label className="text-xs font-medium text-muted-foreground">Zone (Optional)</label>
-                      <Select
-                        value={newEntry.zoneId ? newEntry.zoneId.toString() : "none"}
-                        onValueChange={(value) => setNewEntry({ ...newEntry, zoneId: value === "none" ? undefined : parseInt(value) })}
-                      >
-                        <SelectTrigger className="h-8 text-sm mt-1 bg-background focus:ring-primary/20" data-testid="select-zone">
-                          <SelectValue placeholder="No zone" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">No zone</SelectItem>
-                          {zones?.map((zone) => (
-                            <SelectItem key={zone.id} value={zone.id.toString()}>
-                              {zone.name}
-                            </SelectItem>
-                          ))}
                         </SelectContent>
                       </Select>
                     </div>
