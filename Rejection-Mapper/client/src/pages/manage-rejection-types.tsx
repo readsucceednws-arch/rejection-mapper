@@ -70,7 +70,7 @@ function RejectionTypeForm({
         )} />
         <FormField control={form.control} name="reason" render={({ field }) => (
           <FormItem>
-            <FormLabel>Reason / Description</FormLabel>
+            <FormLabel>Description</FormLabel>
             <FormControl><Input placeholder="e.g. Dimensional out of spec" {...field} value={field.value || ""} data-testid="input-rejection-reason" /></FormControl>
             <FormMessage />
           </FormItem>
@@ -172,7 +172,7 @@ export default function ManageRejectionTypes() {
   const handleCreate = (data: FormValues) => {
     createMutation.mutate(data, {
       onSuccess: () => {
-        toast({ title: "Reason Created", description: "Successfully added new rejection reason." });
+        toast({ title: "Type Created", description: "Successfully added new rejection type." });
         setIsAddOpen(false);
       },
       onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
@@ -183,7 +183,7 @@ export default function ManageRejectionTypes() {
     if (!editType) return;
     updateMutation.mutate({ id: editType.id, data }, {
       onSuccess: () => {
-        toast({ title: "Reason Updated", description: "Changes have been saved." });
+        toast({ title: "Type Updated", description: "Changes have been saved." });
         setEditType(null);
       },
       onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
@@ -194,7 +194,7 @@ export default function ManageRejectionTypes() {
     if (!deleteType) return;
     deleteMutation.mutate(deleteType.id, {
       onSuccess: () => {
-        toast({ title: "Reason Deleted", description: `${deleteType.rejectionCode} has been removed.` });
+        toast({ title: "Type Deleted", description: `${deleteType.rejectionCode} has been removed.` });
         setDeleteType(null);
       },
       onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" }),
@@ -205,7 +205,7 @@ export default function ManageRejectionTypes() {
     const ids = Array.from(selectedIds);
     bulkDeleteMutation.mutate(ids, {
       onSuccess: () => {
-        toast({ title: "Deleted", description: `${ids.length} rejection reason${ids.length !== 1 ? "s" : ""} removed.` });
+        toast({ title: "Deleted", description: `${ids.length} rejection type${ids.length !== 1 ? "s" : ""} removed.` });
         setSelectedIds(new Set());
         setShowBulkConfirm(false);
       },
@@ -220,8 +220,8 @@ export default function ManageRejectionTypes() {
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-display font-bold text-foreground">Manage Rejection Reasons</h1>
-          <p className="text-muted-foreground mt-1 text-sm">Rejection reason codes</p>
+          <h1 className="text-3xl font-display font-bold text-foreground">Manage Rejection Types</h1>
+          <p className="text-muted-foreground mt-1 text-sm">Rejection type codes</p>
         </div>
         <div className="flex items-center gap-2">
           {isAdmin && someSelected && (
@@ -237,20 +237,20 @@ export default function ManageRejectionTypes() {
           <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
             <DialogTrigger asChild>
               <Button className="shadow-md shadow-primary/20" data-testid="button-add-rejection-type">
-                <Plus className="w-4 h-4 mr-2" />Add Reason
+                <Plus className="w-4 h-4 mr-2" />Add Type
               </Button>
             </DialogTrigger>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
-                <DialogTitle>Add Rejection Reason</DialogTitle>
-                <DialogDescription>Create a new reason code for logging entries.</DialogDescription>
+                <DialogTitle>Add Rejection Type</DialogTitle>
+                <DialogDescription>Create a new type code for logging entries.</DialogDescription>
               </DialogHeader>
               <RejectionTypeForm
                 defaultValues={{ rejectionCode: "", reason: "", type: "" }}
                 onSubmit={handleCreate}
                 isPending={createMutation.isPending}
                 onCancel={() => setIsAddOpen(false)}
-                submitLabel="Add Reason"
+                submitLabel="Add Type"
                 zones={zones ?? []}
               />
             </DialogContent>
@@ -262,7 +262,7 @@ export default function ManageRejectionTypes() {
         <div className="p-4 border-b border-border/50 bg-muted/20">
           <div className="relative w-full max-w-sm">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input type="search" placeholder="Search reasons..." className="pl-9 bg-background"
+            <Input type="search" placeholder="Search types..." className="pl-9 bg-background"
               value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} data-testid="input-search-rejection-types" />
           </div>
         </div>
@@ -281,7 +281,7 @@ export default function ManageRejectionTypes() {
                   </TableHead>
                 )}
                 <TableHead>Code</TableHead>
-                <TableHead>Reason</TableHead>
+                <TableHead>Description</TableHead>
                 <TableHead>Zone</TableHead>
                 <TableHead className="w-[80px]"></TableHead>
               </TableRow>
@@ -337,7 +337,7 @@ export default function ManageRejectionTypes() {
                 <TableRow>
                   <TableCell colSpan={isAdmin ? 5 : 4} className="text-center py-12">
                     <div className="flex flex-col items-center justify-center text-muted-foreground">
-                      <AlertTriangle className="h-8 w-8 mb-2 opacity-20" /><p>No rejection reasons found</p>
+                      <AlertTriangle className="h-8 w-8 mb-2 opacity-20" /><p>No rejection types found</p>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -351,8 +351,8 @@ export default function ManageRejectionTypes() {
       <Dialog open={!!editType} onOpenChange={(o) => !o && setEditType(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Edit Rejection Reason</DialogTitle>
-            <DialogDescription>Update the reason code details.</DialogDescription>
+            <DialogTitle>Edit Rejection Type</DialogTitle>
+            <DialogDescription>Update the type code details.</DialogDescription>
           </DialogHeader>
           {editType && (
             <RejectionTypeForm
@@ -375,9 +375,9 @@ export default function ManageRejectionTypes() {
       <AlertDialog open={!!deleteType} onOpenChange={(o) => !o && setDeleteType(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Rejection Reason?</AlertDialogTitle>
+            <AlertDialogTitle>Delete Rejection Type?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently remove <strong>{deleteType?.rejectionCode}</strong> and all log entries that use this reason. This action cannot be undone.
+              This will permanently remove <strong>{deleteType?.rejectionCode}</strong> and all log entries that use this type. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
