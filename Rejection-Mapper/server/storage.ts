@@ -356,9 +356,10 @@ export class DatabaseStorage implements IStorage {
 
   async getPartWiseSummary(organizationId: number, filters?: { startDate?: string; endDate?: string; type?: string }): Promise<{ partNumber: string; description: string | null; totalQuantity: number; rejections: number; reworks: number }[]> {
     const dateFilters = { startDate: filters?.startDate, endDate: filters?.endDate };
+    const typeFilter = filters?.type === "all" ? undefined : filters?.type;
     const map = new Map<number, { partNumber: string; description: string | null; totalQuantity: number; rejections: number; reworks: number; partId: number }>();
 
-    if (!filters?.type || filters.type === "rejection") {
+    if (!typeFilter || typeFilter === "rejection") {
       const entries = await this.getRejectionEntries(organizationId, dateFilters);
       for (const entry of entries) {
         const key = entry.partId;
@@ -369,7 +370,7 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    if (!filters?.type || filters.type === "rework") {
+    if (!typeFilter || typeFilter === "rework") {
       const rEntries = await this.getReworkEntries(organizationId, dateFilters);
       for (const entry of rEntries) {
         const key = entry.partId;
@@ -385,6 +386,7 @@ export class DatabaseStorage implements IStorage {
 
   async getMonthWiseSummary(organizationId: number, filters?: { startDate?: string; endDate?: string; type?: string }): Promise<{ month: string; totalQuantity: number; rejections: number; reworks: number }[]> {
     const dateFilters = { startDate: filters?.startDate, endDate: filters?.endDate };
+    const typeFilter = filters?.type === "all" ? undefined : filters?.type;
     const map = new Map<string, { month: string; totalQuantity: number; rejections: number; reworks: number }>();
 
     const addToMap = (date: Date, quantity: number, isRework: boolean) => {
@@ -397,12 +399,12 @@ export class DatabaseStorage implements IStorage {
       map.set(key, existing);
     };
 
-    if (!filters?.type || filters.type === "rejection") {
+    if (!typeFilter || typeFilter === "rejection") {
       const entries = await this.getRejectionEntries(organizationId, dateFilters);
       for (const e of entries) addToMap(new Date(e.date), e.quantity, false);
     }
 
-    if (!filters?.type || filters.type === "rework") {
+    if (!typeFilter || typeFilter === "rework") {
       const rEntries = await this.getReworkEntries(organizationId, dateFilters);
       for (const e of rEntries) addToMap(new Date(e.date), e.quantity, true);
     }
@@ -415,9 +417,12 @@ export class DatabaseStorage implements IStorage {
 
     const entries = await this.getRejectionEntries(organizationId, filters);
     for (const entry of entries) {
-      const price = entry.part.price || 0;
-      const existing = map.get(entry.partId) || { partId: entry.partId, partNumber: entry.part.partNumber, description: entry.part.description, price, rejectionQty: 0, reworkQty: 0, rejectionCost: 0, reworkCost: 0, totalCost: 0 };
-      const cost = entry.quantity * price;
+      const partPrice = Number(entry.part.price) || 0;
+      const entryRate = Number(entry.rate) || 0;
+      const entryAmount = Number(entry.amount) || 0;
+      const cost = entryAmount > 0 ? entryAmount : (entryRate > 0 ? entry.quantity * entryRate : entry.quantity * partPrice);
+      const unitPrice = entryRate > 0 ? entryRate : partPrice;
+      const existing = map.get(entry.partId) || { partId: entry.partId, partNumber: entry.part.partNumber, description: entry.part.description, price: unitPrice, rejectionQty: 0, reworkQty: 0, rejectionCost: 0, reworkCost: 0, totalCost: 0 };
       if (entry.rejectionType.type === "rework") { existing.reworkQty += entry.quantity; existing.reworkCost += cost; }
       else { existing.rejectionQty += entry.quantity; existing.rejectionCost += cost; }
       existing.totalCost = existing.rejectionCost + existing.reworkCost;
@@ -426,9 +431,12 @@ export class DatabaseStorage implements IStorage {
 
     const rEntries = await this.getReworkEntries(organizationId, filters);
     for (const entry of rEntries) {
-      const price = entry.part.price || 0;
-      const existing = map.get(entry.partId) || { partId: entry.partId, partNumber: entry.part.partNumber, description: entry.part.description, price, rejectionQty: 0, reworkQty: 0, rejectionCost: 0, reworkCost: 0, totalCost: 0 };
-      const cost = entry.quantity * price;
+      const partPrice = Number(entry.part.price) || 0;
+      const entryRate = Number(entry.rate) || 0;
+      const entryAmount = Number(entry.amount) || 0;
+      const cost = entryAmount > 0 ? entryAmount : (entryRate > 0 ? entry.quantity * entryRate : entry.quantity * partPrice);
+      const unitPrice = entryRate > 0 ? entryRate : partPrice;
+      const existing = map.get(entry.partId) || { partId: entry.partId, partNumber: entry.part.partNumber, description: entry.part.description, price: unitPrice, rejectionQty: 0, reworkQty: 0, rejectionCost: 0, reworkCost: 0, totalCost: 0 };
       existing.reworkQty += entry.quantity;
       existing.reworkCost += cost;
       existing.totalCost = existing.rejectionCost + existing.reworkCost;
@@ -441,9 +449,20 @@ export class DatabaseStorage implements IStorage {
   async getZoneWiseSummary(organizationId: number, filters?: { startDate?: string; endDate?: string }): Promise<{ zone: string; totalQuantity: number; rejections: number; reworks: number }[]> {
     const map = new Map<string, { zone: string; totalQuantity: number; rejections: number; reworks: number }>();
 
-    function resolveZone(val: string | null | undefined): string {
-      if (!val || val === "rejection" || val === "rework") return "General";
-      return val;
+    function isLegacyTypeVal(val: string | null | undefined): boolean {
+      return !val || val === "rejection" || val === "rework";
+    }
+
+    function resolveRejectionZone(e: { zone?: { name: string } | null; rejectionType: { type: string } }): string {
+      if (e.zone?.name) return e.zone.name;
+      if (!isLegacyTypeVal(e.rejectionType.type)) return e.rejectionType.type;
+      return "General";
+    }
+
+    function resolveReworkZone(e: { zone?: { name: string } | null; reworkType: { zone: string | null } }): string {
+      if (e.zone?.name) return e.zone.name;
+      if (e.reworkType.zone && !isLegacyTypeVal(e.reworkType.zone)) return e.reworkType.zone;
+      return "General";
     }
 
     function addToMap(zone: string, quantity: number, isRework: boolean) {
@@ -456,12 +475,12 @@ export class DatabaseStorage implements IStorage {
 
     const rejEntries = await this.getRejectionEntries(organizationId, filters);
     for (const e of rejEntries) {
-      addToMap(resolveZone(e.rejectionType.type), e.quantity, false);
+      addToMap(resolveRejectionZone(e), e.quantity, false);
     }
 
     const rwEntries = await this.getReworkEntries(organizationId, filters);
     for (const e of rwEntries) {
-      addToMap(resolveZone(e.reworkType.zone), e.quantity, true);
+      addToMap(resolveReworkZone(e), e.quantity, true);
     }
 
     return Array.from(map.values()).sort((a, b) => b.totalQuantity - a.totalQuantity);
