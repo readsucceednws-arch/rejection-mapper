@@ -30,7 +30,6 @@ A manufacturing parts rejection tracking web app built with React, Express, and 
 ## Project Structure
 
 ```
-Rejection-Mapper/
 ├── client/        # React frontend (Vite)
 ├── server/        # Express.js backend
 ├── shared/        # Shared schema and types (Drizzle ORM + Zod)
@@ -39,4 +38,4 @@ Rejection-Mapper/
 
 ## Getting Started
 
-See [`Rejection-Mapper/replit.md`](./Rejection-Mapper/replit.md) for full documentation including database tables, key files, auth notes, and email configuration.
+See [`replit.md`](./replit.md) for full documentation including database tables, key files, auth notes, and email configuration.
