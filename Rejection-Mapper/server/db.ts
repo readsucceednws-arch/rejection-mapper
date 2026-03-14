@@ -1,4 +1,5 @@
 import { drizzle } from "drizzle-orm/node-postgres";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import dns from "dns/promises";
 import * as schema from "@shared/schema";
@@ -10,7 +11,7 @@ if (!process.env.DATABASE_URL) {
 }
 
 export let pool: pg.Pool;
-export let db: ReturnType<typeof drizzle>;
+export let db: NodePgDatabase<typeof schema>;
 
 // Only resolve single-word internal hostnames like 'helium' (the dev DB host).
 // Skip localhost, IPs, and public domain names — those don't need DNS pre-resolution
