@@ -106,3 +106,46 @@ export function isAuthenticated(req: Request, res: Response, next: NextFunction)
 export function isGoogleAuthEnabled(): boolean {
   return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 }
+
+            const existing = await storage.getUserByEmail(email);
+            if (existing) return done(null, existing);
+
+            const orgName = profile.displayName || email.split("@")[0] || "My Organization";
+            const org = await storage.createOrganization(orgName);
+            const placeholderPassword = `google_oauth_${randomBytes(16).toString("hex")}`;
+            const user = await storage.createUser({
+              email,
+              password: placeholderPassword,
+              role: "admin",
+              organizationId: org.id,
+            });
+
+            (user as any).__newOrgInviteCode = org.inviteCode;
+            return done(null, user);
+          } catch (err) {
+            return done(err as Error);
+          }
+        }
+      )
+    );
+  }
+
+  passport.serializeUser((user: any, done) => done(null, user.id));
+  passport.deserializeUser(async (id: number, done) => {
+    try {
+      const user = await storage.getUserById(id);
+      done(null, user ?? false);
+    } catch (err) {
+      done(err);
+    }
+  });
+}
+
+export function isAuthenticated(req: Request, res: Response, next: NextFunction) {
+  if (req.isAuthenticated()) return next();
+  res.status(401).json({ message: "Unauthorized" });
+}
+
+export function isGoogleAuthEnabled(): boolean {
+  return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+}
