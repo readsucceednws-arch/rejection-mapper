@@ -36,7 +36,7 @@ function buildQuery(filters: AnalyticsFilters) {
   const params = new URLSearchParams();
   if (filters.startDate) params.set("startDate", filters.startDate);
   if (filters.endDate) params.set("endDate", filters.endDate);
-  if (filters.type) params.set("type", filters.type);
+  if (filters.type && filters.type !== "all") params.set("type", filters.type);
   const qs = params.toString();
   return qs ? `?${qs}` : "";
 }
