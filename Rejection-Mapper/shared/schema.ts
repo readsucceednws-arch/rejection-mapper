@@ -1,4 +1,11 @@
-import { pgTable, text, serial, integer, timestamp, doublePrecision } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  text,
+  serial,
+  integer,
+  timestamp,
+  doublePrecision,
+} from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -48,7 +55,9 @@ export const zones = pgTable("zones", {
 export const rejectionEntries = pgTable("rejection_entries", {
   id: serial("id").primaryKey(),
   partId: integer("part_id").references(() => parts.id).notNull(),
-  rejectionTypeId: integer("rejection_type_id").references(() => rejectionTypes.id).notNull(),
+  rejectionTypeId: integer("rejection_type_id")
+    .references(() => rejectionTypes.id)
+    .notNull(),
   quantity: integer("quantity").notNull().default(1),
   remarks: text("remarks"),
   date: timestamp("date").notNull().defaultNow(),
@@ -66,14 +75,16 @@ export const reworkTypes = pgTable("rework_types", {
   id: serial("id").primaryKey(),
   reworkCode: text("rework_code").notNull(),
   reason: text("reason").notNull(),
-  zone: text("zone").default("zone1"),
+  type: text("type").notNull().default("Zone 1"),
   organizationId: integer("organization_id").references(() => organizations.id),
 });
 
 export const reworkEntries = pgTable("rework_entries", {
   id: serial("id").primaryKey(),
   partId: integer("part_id").references(() => parts.id).notNull(),
-  reworkTypeId: integer("rework_type_id").references(() => reworkTypes.id).notNull(),
+  reworkTypeId: integer("rework_type_id")
+    .references(() => reworkTypes.id)
+    .notNull(),
   quantity: integer("quantity").notNull().default(1),
   remarks: text("remarks"),
   date: timestamp("date").notNull().defaultNow(),
@@ -103,66 +114,155 @@ export const inviteTokens = pgTable("invite_tokens", {
 
 // === RELATIONS ===
 
-export const organizationsRelations = relations(organizations, ({ many }) => ({
-  users: many(users),
-  parts: many(parts),
-  rejectionTypes: many(rejectionTypes),
-  rejectionEntries: many(rejectionEntries),
-  reworkTypes: many(reworkTypes),
-  reworkEntries: many(reworkEntries),
-  zones: many(zones),
-}));
+export const organizationsRelations = relations(
+  organizations,
+  ({ many }) => ({
+    users: many(users),
+    parts: many(parts),
+    rejectionTypes: many(rejectionTypes),
+    rejectionEntries: many(rejectionEntries),
+    reworkTypes: many(reworkTypes),
+    reworkEntries: many(reworkEntries),
+    zones: many(zones),
+  })
+);
 
 export const usersRelations = relations(users, ({ one }) => ({
-  organization: one(organizations, { fields: [users.organizationId], references: [organizations.id] }),
+  organization: one(organizations, {
+    fields: [users.organizationId],
+    references: [organizations.id],
+  }),
 }));
 
 export const partsRelations = relations(parts, ({ many, one }) => ({
   rejectionEntries: many(rejectionEntries),
   reworkEntries: many(reworkEntries),
-  organization: one(organizations, { fields: [parts.organizationId], references: [organizations.id] }),
+  organization: one(organizations, {
+    fields: [parts.organizationId],
+    references: [organizations.id],
+  }),
 }));
 
-export const rejectionTypesRelations = relations(rejectionTypes, ({ many, one }) => ({
-  entries: many(rejectionEntries),
-  organization: one(organizations, { fields: [rejectionTypes.organizationId], references: [organizations.id] }),
-}));
+export const rejectionTypesRelations = relations(
+  rejectionTypes,
+  ({ many, one }) => ({
+    entries: many(rejectionEntries),
+    organization: one(organizations, {
+      fields: [rejectionTypes.organizationId],
+      references: [organizations.id],
+    }),
+  })
+);
 
 export const zonesRelations = relations(zones, ({ one, many }) => ({
-  organization: one(organizations, { fields: [zones.organizationId], references: [organizations.id] }),
+  organization: one(organizations, {
+    fields: [zones.organizationId],
+    references: [organizations.id],
+  }),
   rejectionEntries: many(rejectionEntries),
   reworkEntries: many(reworkEntries),
 }));
 
-export const rejectionEntriesRelations = relations(rejectionEntries, ({ one }) => ({
-  part: one(parts, { fields: [rejectionEntries.partId], references: [parts.id] }),
-  rejectionType: one(rejectionTypes, { fields: [rejectionEntries.rejectionTypeId], references: [rejectionTypes.id] }),
-  organization: one(organizations, { fields: [rejectionEntries.organizationId], references: [organizations.id] }),
-  zone: one(zones, { fields: [rejectionEntries.zoneId], references: [zones.id] }),
-}));
+export const rejectionEntriesRelations = relations(
+  rejectionEntries,
+  ({ one }) => ({
+    part: one(parts, {
+      fields: [rejectionEntries.partId],
+      references: [parts.id],
+    }),
+    rejectionType: one(rejectionTypes, {
+      fields: [rejectionEntries.rejectionTypeId],
+      references: [rejectionTypes.id],
+    }),
+    organization: one(organizations, {
+      fields: [rejectionEntries.organizationId],
+      references: [organizations.id],
+    }),
+    zone: one(zones, {
+      fields: [rejectionEntries.zoneId],
+      references: [zones.id],
+    }),
+  })
+);
 
-export const reworkTypesRelations = relations(reworkTypes, ({ many, one }) => ({
-  entries: many(reworkEntries),
-  organization: one(organizations, { fields: [reworkTypes.organizationId], references: [organizations.id] }),
-}));
+export const reworkTypesRelations = relations(
+  reworkTypes,
+  ({ many, one }) => ({
+    entries: many(reworkEntries),
+    organization: one(organizations, {
+      fields: [reworkTypes.organizationId],
+      references: [organizations.id],
+    }),
+  })
+);
 
 export const reworkEntriesRelations = relations(reworkEntries, ({ one }) => ({
-  part: one(parts, { fields: [reworkEntries.partId], references: [parts.id] }),
-  reworkType: one(reworkTypes, { fields: [reworkEntries.reworkTypeId], references: [reworkTypes.id] }),
-  organization: one(organizations, { fields: [reworkEntries.organizationId], references: [organizations.id] }),
-  zone: one(zones, { fields: [reworkEntries.zoneId], references: [zones.id] }),
+  part: one(parts, {
+    fields: [reworkEntries.partId],
+    references: [parts.id],
+  }),
+  reworkType: one(reworkTypes, {
+    fields: [reworkEntries.reworkTypeId],
+    references: [reworkTypes.id],
+  }),
+  organization: one(organizations, {
+    fields: [reworkEntries.organizationId],
+    references: [organizations.id],
+  }),
+  zone: one(zones, {
+    fields: [reworkEntries.zoneId],
+    references: [zones.id],
+  }),
 }));
 
 // === BASE SCHEMAS ===
 
-export const insertOrganizationSchema = createInsertSchema(organizations).omit({ id: true, createdAt: true });
-export const insertPartSchema = createInsertSchema(parts).omit({ id: true });
-export const insertRejectionTypeSchema = createInsertSchema(rejectionTypes).omit({ id: true });
-export const insertRejectionEntrySchema = createInsertSchema(rejectionEntries).omit({ id: true, date: true, importedAt: true });
-export const insertReworkTypeSchema = createInsertSchema(reworkTypes).omit({ id: true });
-export const insertReworkEntrySchema = createInsertSchema(reworkEntries).omit({ id: true, date: true, importedAt: true });
-export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
-export const insertZoneSchema = createInsertSchema(zones).omit({ id: true, createdAt: true });
+export const insertOrganizationSchema = createInsertSchema(
+  organizations
+).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertPartSchema = createInsertSchema(parts).omit({
+  id: true,
+});
+
+export const insertRejectionTypeSchema = createInsertSchema(
+  rejectionTypes
+).omit({
+  id: true,
+});
+
+export const insertRejectionEntrySchema = createInsertSchema(
+  rejectionEntries
+).omit({
+  id: true,
+  date: true,
+  importedAt: true,
+});
+
+export const insertReworkTypeSchema = createInsertSchema(reworkTypes).omit({
+  id: true,
+});
+
+export const insertReworkEntrySchema = createInsertSchema(
+  reworkEntries
+).omit({
+  id: true,
+  date: true,
+  importedAt: true,
+});
+
+export const insertUserSchema = createInsertSchema(users).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertZoneSchema = createInsertSchema(zones).omit({
+  id: true,
+  createdAt: true,
+});
 
 // === EXPLICIT API CONTRACT TYPES ===
 
