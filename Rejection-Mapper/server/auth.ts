@@ -122,7 +122,7 @@ export function isGoogleAuthEnabled(): boolean {
 
             (user as any).__newOrgInviteCode = org.inviteCode;
             return done(null, user);
-          } catch (err) {
+            catch (err) {
             return done(err as Error);
           }
         }
