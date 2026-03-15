@@ -580,11 +580,13 @@ export async function registerRoutes(
   app.post("/api/rework-types", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const { insertReworkTypeSchema } = await import("@shared/schema");
-      const parsed = insertReworkTypeSchema.parse(req.body);
+      const parsed = z.object({
+        reworkCode: z.string().min(1, "Rework code is required"),
+        zone: z.string().optional(),
+      }).parse(req.body);
       const input = {
         reworkCode: parsed.reworkCode,
-        reason: parsed.reason,
+        reason: parsed.reworkCode,
         zone: parsed.zone,
       };
       const created = await storage.createReworkType({ ...input, organizationId: orgId });
@@ -601,11 +603,13 @@ export async function registerRoutes(
     try {
       const orgId = getOrgId(req);
       const id = getParamId(req.params.id);
-      const { insertReworkTypeSchema } = await import("@shared/schema");
-      const parsed = insertReworkTypeSchema.partial().parse(req.body);
+      const parsed = z.object({
+        reworkCode: z.string().min(1, "Rework code is required").optional(),
+        zone: z.string().optional(),
+      }).parse(req.body);
       const input = {
         ...(parsed.reworkCode !== undefined ? { reworkCode: parsed.reworkCode } : {}),
-        ...(parsed.reason !== undefined ? { reason: parsed.reason } : {}),
+        ...(parsed.reworkCode !== undefined ? { reason: parsed.reworkCode } : {}),
         ...(parsed.zone !== undefined ? { zone: parsed.zone } : {}),
       };
       const updated = await storage.updateReworkType(id, orgId, input);
