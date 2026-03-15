@@ -18,7 +18,10 @@ export function useCreateZone() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (name: string) => apiRequest("POST", "/api/zones", { name }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/zones"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/zones"] });
+      qc.invalidateQueries({ queryKey: ["/api/analytics/by-zone"] });
+    },
   });
 }
 
@@ -27,7 +30,10 @@ export function useUpdateZone() {
   return useMutation({
     mutationFn: async ({ id, name }: { id: number; name: string }) =>
       apiRequest("PUT", `/api/zones/${id}`, { name }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/zones"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/zones"] });
+      qc.invalidateQueries({ queryKey: ["/api/analytics/by-zone"] });
+    },
   });
 }
 
@@ -35,6 +41,9 @@ export function useDeleteZone() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: number) => apiRequest("DELETE", `/api/zones/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/zones"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/zones"] });
+      qc.invalidateQueries({ queryKey: ["/api/analytics/by-zone"] });
+    },
   });
 }
