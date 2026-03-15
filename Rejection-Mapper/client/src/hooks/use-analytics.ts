@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+aimport { useQuery } from "@tanstack/react-query";
 
 export interface PartWiseData {
   partNumber: string;
