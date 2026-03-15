@@ -46,6 +46,7 @@ interface EntryItem {
 
 const formSchema = z.object({
   partId: z.coerce.number().min(1, "Please select a part"),
+  entryDate: z.string().optional(),
   remarks: z.string().optional(),
 });
 
@@ -100,6 +101,7 @@ export default function LogEntry() {
     resolver: zodResolver(formSchema),
     defaultValues: {
       partId: 0,
+      entryDate: new Date().toISOString().split("T")[0],
       remarks: "",
     },
   });
@@ -130,7 +132,13 @@ export default function LogEntry() {
       for (const entry of entries) {
         await new Promise((resolve, reject) => {
           createMutation.mutate(
-            { partId: data.partId, rejectionTypeId: entry.rejectionTypeId, quantity: entry.quantity, remarks: data.remarks },
+            {
+              partId: data.partId,
+              rejectionTypeId: entry.rejectionTypeId,
+              quantity: entry.quantity,
+              remarks: data.remarks,
+              entryDate: data.entryDate || undefined,
+            },
             { onSuccess: resolve, onError: reject }
           );
         });
@@ -165,6 +173,7 @@ export default function LogEntry() {
       const codeOrReason = row["code"] || row["reason"] || row["rejection code"] || row["rework code"] || "";
       const quantity = parseInt(row["quantity"] || row["qty"] || "1") || 1;
       const remarks = row["remarks"] || row["notes"] || "";
+      const entryDate = row["date"] || row["entry date"] || row["entrydate"] || "";
 
       const part = parts?.find(
         p => p.partNumber.toLowerCase() === partNumber?.toLowerCase()
@@ -182,7 +191,13 @@ export default function LogEntry() {
       try {
         await new Promise<void>((resolve, reject) => {
           createMutation.mutate(
-            { partId: part.id, rejectionTypeId: rejType.id, quantity, remarks: remarks || undefined },
+            {
+              partId: part.id,
+              rejectionTypeId: rejType.id,
+              quantity,
+              remarks: remarks || undefined,
+              entryDate: entryDate || undefined,
+            },
             { onSuccess: () => resolve(), onError: reject }
           );
         });
@@ -283,6 +298,26 @@ export default function LogEntry() {
                 )}
               />
 
+              <FormField
+                control={form.control}
+                name="entryDate"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Date</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="date"
+                        className="bg-background focus:ring-primary/20"
+                        {...field}
+                        value={field.value || ""}
+                        data-testid="input-entry-date"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
               <div className="border border-border/50 rounded-lg p-4 space-y-4 bg-muted/20">
                 <div className="flex items-center justify-between">
                   <h3 className="font-semibold text-sm">Entry Items</h3>
@@ -299,13 +334,11 @@ export default function LogEntry() {
                         ? reworkTypes?.find(t => t.id === entry.rejectionTypeId)
                         : null;
                       const displayCode = rejType?.rejectionCode ?? rwType?.reworkCode ?? "Unknown";
-                      const displayReason = rejType?.reason ?? rwType?.reason ?? "";
                       return (
                         <div key={entry.id} className="flex items-center justify-between p-3 bg-background rounded border border-border/30">
                           <div className="flex-1">
                             <div className="text-sm font-medium flex items-center gap-2">
                               <span className="font-mono">{displayCode}</span>
-                              {displayReason && <span className="text-muted-foreground text-xs">— {displayReason}</span>}
                               <span className="text-muted-foreground text-xs">({entry.purpose})</span>
                             </div>
                             <div className="text-sm text-muted-foreground">
@@ -360,13 +393,11 @@ export default function LogEntry() {
                             ? rejectionTypes?.map((type) => (
                                 <SelectItem key={type.id} value={type.id.toString()}>
                                   <span className="font-mono font-medium">{type.rejectionCode}</span>
-                                  {type.reason && <span className="text-muted-foreground ml-2">— {type.reason}</span>}
                                 </SelectItem>
                               ))
                             : reworkTypes?.map((type) => (
                                 <SelectItem key={type.id} value={type.id.toString()}>
                                   <span className="font-mono font-medium">{type.reworkCode}</span>
-                                  {type.reason && <span className="text-muted-foreground ml-2">— {type.reason}</span>}
                                 </SelectItem>
                               ))
                           }
@@ -490,7 +521,6 @@ export default function LogEntry() {
                   {rejectionOnlyTypes.map((t) => (
                     <div key={t.id} className="flex items-center gap-3 p-2 rounded bg-muted/30 text-sm" data-testid={`ref-rejection-${t.id}`}>
                       <Badge variant="outline" className="shrink-0 text-xs font-mono bg-destructive/10 text-destructive border-destructive/20">{t.rejectionCode}</Badge>
-                      <span className="font-medium">{t.reason}</span>
                     </div>
                   ))}
                 </div>
@@ -513,7 +543,6 @@ export default function LogEntry() {
                   {reworkTypes.map((t) => (
                     <div key={t.id} className="flex items-center gap-3 p-2 rounded bg-muted/30 text-sm" data-testid={`ref-rework-${t.id}`}>
                       <Badge variant="outline" className="shrink-0 text-xs font-mono bg-blue-500/10 text-blue-600 border-blue-400/30">{t.reworkCode}</Badge>
-                      <span className="font-medium">{t.reason}</span>
                     </div>
                   ))}
                 </div>
@@ -526,7 +555,6 @@ export default function LogEntry() {
                   {reworkOnlyTypes.map((t) => (
                     <div key={t.id} className="flex items-center gap-3 p-2 rounded bg-muted/30 text-sm" data-testid={`ref-rework-rej-${t.id}`}>
                       <Badge variant="outline" className="shrink-0 text-xs font-mono bg-blue-500/10 text-blue-600 border-blue-400/30">{t.rejectionCode}</Badge>
-                      <span className="font-medium">{t.reason}</span>
                     </div>
                   ))}
                 </div>
