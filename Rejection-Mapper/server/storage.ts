@@ -76,8 +76,8 @@ export interface IStorage {
 
   // Rework Types
   getReworkTypes(organizationId: number): Promise<ReworkType[]>;
-  createReworkType(reworkType: InsertReworkType): Promise<ReworkType>;
-  updateReworkType(id: number, organizationId: number, data: Partial<InsertReworkType>): Promise<ReworkType>;
+  createReworkType(reworkType: { reworkCode: string; reason: string; zone?: string | null; organizationId?: number | null }): Promise<ReworkType>;
+  updateReworkType(id: number, organizationId: number, data: { reworkCode?: string; reason?: string; zone?: string | null }): Promise<ReworkType>;
   deleteReworkType(id: number, organizationId: number): Promise<void>;
   bulkDeleteReworkTypes(ids: number[], organizationId: number): Promise<void>;
 
@@ -286,13 +286,24 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(reworkTypes).where(eq(reworkTypes.organizationId, organizationId));
   }
 
-  async createReworkType(reworkType: InsertReworkType): Promise<ReworkType> {
-    const [created] = await db.insert(reworkTypes).values(reworkType).returning();
+  async createReworkType(reworkType: { reworkCode: string; reason: string; zone?: string | null; organizationId?: number | null }): Promise<ReworkType> {
+    const payload = {
+      reworkCode: reworkType.reworkCode,
+      reason: reworkType.reason,
+      zone: reworkType.zone,
+      organizationId: reworkType.organizationId,
+    };
+    const [created] = await db.insert(reworkTypes).values(payload).returning();
     return created;
   }
 
-  async updateReworkType(id: number, organizationId: number, data: Partial<InsertReworkType>): Promise<ReworkType> {
-    const [updated] = await db.update(reworkTypes).set(data).where(and(eq(reworkTypes.id, id), eq(reworkTypes.organizationId, organizationId))).returning();
+  async updateReworkType(id: number, organizationId: number, data: { reworkCode?: string; reason?: string; zone?: string | null }): Promise<ReworkType> {
+    const payload = {
+      ...(data.reworkCode !== undefined ? { reworkCode: data.reworkCode } : {}),
+      ...(data.reason !== undefined ? { reason: data.reason } : {}),
+      ...(data.zone !== undefined ? { zone: data.zone } : {}),
+    };
+    const [updated] = await db.update(reworkTypes).set(payload).where(and(eq(reworkTypes.id, id), eq(reworkTypes.organizationId, organizationId))).returning();
     if (!updated) throw new Error("Rework type not found");
     return updated;
   }
@@ -383,13 +394,17 @@ export class DatabaseStorage implements IStorage {
     }
 
     if (!typeFilter || typeFilter === "rework") {
-      const rEntries = await this.getReworkEntries(organizationId, dateFilters);
-      for (const entry of rEntries) {
-        const key = entry.partId;
-        const existing = map.get(key) || { partId: key, partNumber: entry.part.partNumber, description: entry.part.description, totalQuantity: 0, rejections: 0, reworks: 0 };
-        existing.totalQuantity += entry.quantity;
-        existing.reworks += entry.quantity;
-        map.set(key, existing);
+      try {
+        const rEntries = await this.getReworkEntries(organizationId, dateFilters);
+        for (const entry of rEntries) {
+          const key = entry.partId;
+          const existing = map.get(key) || { partId: key, partNumber: entry.part.partNumber, description: entry.part.description, totalQuantity: 0, rejections: 0, reworks: 0 };
+          existing.totalQuantity += entry.quantity;
+          existing.reworks += entry.quantity;
+          map.set(key, existing);
+        }
+      } catch {
+        if (typeFilter === "rework") return [];
       }
     }
 
@@ -417,8 +432,12 @@ export class DatabaseStorage implements IStorage {
     }
 
     if (!typeFilter || typeFilter === "rework") {
-      const rEntries = await this.getReworkEntries(organizationId, dateFilters);
-      for (const e of rEntries) addToMap(new Date(e.date), e.quantity, true);
+      try {
+        const rEntries = await this.getReworkEntries(organizationId, dateFilters);
+        for (const e of rEntries) addToMap(new Date(e.date), e.quantity, true);
+      } catch {
+        if (typeFilter === "rework") return [];
+      }
     }
 
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v);
@@ -441,18 +460,22 @@ export class DatabaseStorage implements IStorage {
       map.set(entry.partId, existing);
     }
 
-    const rEntries = await this.getReworkEntries(organizationId, filters);
-    for (const entry of rEntries) {
-      const partPrice = Number(entry.part.price) || 0;
-      const entryRate = Number(entry.rate) || 0;
-      const entryAmount = Number(entry.amount) || 0;
-      const cost = entryAmount > 0 ? entryAmount : (entryRate > 0 ? entry.quantity * entryRate : entry.quantity * partPrice);
-      const unitPrice = entryRate > 0 ? entryRate : partPrice;
-      const existing = map.get(entry.partId) || { partId: entry.partId, partNumber: entry.part.partNumber, description: entry.part.description, price: unitPrice, rejectionQty: 0, reworkQty: 0, rejectionCost: 0, reworkCost: 0, totalCost: 0 };
-      existing.reworkQty += entry.quantity;
-      existing.reworkCost += cost;
-      existing.totalCost = existing.rejectionCost + existing.reworkCost;
-      map.set(entry.partId, existing);
+    try {
+      const rEntries = await this.getReworkEntries(organizationId, filters);
+      for (const entry of rEntries) {
+        const partPrice = Number(entry.part.price) || 0;
+        const entryRate = Number(entry.rate) || 0;
+        const entryAmount = Number(entry.amount) || 0;
+        const cost = entryAmount > 0 ? entryAmount : (entryRate > 0 ? entry.quantity * entryRate : entry.quantity * partPrice);
+        const unitPrice = entryRate > 0 ? entryRate : partPrice;
+        const existing = map.get(entry.partId) || { partId: entry.partId, partNumber: entry.part.partNumber, description: entry.part.description, price: unitPrice, rejectionQty: 0, reworkQty: 0, rejectionCost: 0, reworkCost: 0, totalCost: 0 };
+        existing.reworkQty += entry.quantity;
+        existing.reworkCost += cost;
+        existing.totalCost = existing.rejectionCost + existing.reworkCost;
+        map.set(entry.partId, existing);
+      }
+    } catch {
+      // Keep rejection-side cost analytics available even if rework queries fail.
     }
 
     return Array.from(map.values()).map(({ partId, ...rest }) => rest).sort((a, b) => b.totalCost - a.totalCost);
@@ -490,9 +513,13 @@ export class DatabaseStorage implements IStorage {
       addToMap(resolveRejectionZone(e), e.quantity, false);
     }
 
-    const rwEntries = await this.getReworkEntries(organizationId, filters);
-    for (const e of rwEntries) {
-      addToMap(resolveReworkZone(e), e.quantity, true);
+    try {
+      const rwEntries = await this.getReworkEntries(organizationId, filters);
+      for (const e of rwEntries) {
+        addToMap(resolveReworkZone(e), e.quantity, true);
+      }
+    } catch {
+      // Keep rejection-side zone analytics available even if rework queries fail.
     }
 
     return Array.from(map.values()).sort((a, b) => b.totalQuantity - a.totalQuantity);
