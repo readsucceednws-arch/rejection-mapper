@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect } from "react";
 import { useReportSummary } from "@/hooks/use-reports";
 import { usePartWiseAnalytics, useMonthWiseAnalytics, useCostAnalytics, useZoneWiseAnalytics } from "@/hooks/use-analytics";
+import { useRejectionEntries } from "@/hooks/use-rejection-entries";
+import { useReworkEntries } from "@/hooks/use-rework-entries";
 import { useParts } from "@/hooks/use-parts";
 import { useRejectionTypes } from "@/hooks/use-rejection-types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -244,15 +246,125 @@ export default function Dashboard() {
   const { data: monthData, isLoading: isLoadingMonths } = useMonthWiseAnalytics(monthFilters);
   const { data: costData, isLoading: isLoadingCost } = useCostAnalytics(costFilters);
   const { data: zoneData, isLoading: isLoadingZone } = useZoneWiseAnalytics(zoneFilters);
+  const { data: analyticsRejectionEntries, isLoading: isLoadingAnalyticsRejections } = useRejectionEntries(overviewFilters);
+  const { data: analyticsReworkEntries, isLoading: isLoadingAnalyticsReworks } = useReworkEntries(overviewFilters);
+  const { data: zoneRejectionEntries, isLoading: isLoadingZoneRejections } = useRejectionEntries(zoneFilters);
+  const { data: zoneReworkEntries, isLoading: isLoadingZoneReworks } = useReworkEntries(zoneFilters);
   const { data: allParts } = useParts();
   const { data: rejectionTypes } = useRejectionTypes();
+
+  const fallbackOverviewRejected = analyticsRejectionEntries?.reduce((sum, entry) => sum + entry.quantity, 0) ?? 0;
+  const fallbackOverviewRework = analyticsReworkEntries?.reduce((sum, entry) => sum + entry.quantity, 0) ?? 0;
+
+  const fallbackPartData = useMemo(() => {
+    const map = new Map<string, { partNumber: string; description: string | null; totalQuantity: number; rejections: number; reworks: number }>();
+
+    if (!partTabFilters.type || partTabFilters.type === "rejection") {
+      for (const entry of analyticsRejectionEntries ?? []) {
+        const key = entry.part.partNumber;
+        const existing = map.get(key) || { partNumber: entry.part.partNumber, description: entry.part.description, totalQuantity: 0, rejections: 0, reworks: 0 };
+        existing.rejections += entry.quantity;
+        existing.totalQuantity += entry.quantity;
+        map.set(key, existing);
+      }
+    }
+
+    if (!partTabFilters.type || partTabFilters.type === "rework") {
+      for (const entry of analyticsReworkEntries ?? []) {
+        const key = entry.part.partNumber;
+        const existing = map.get(key) || { partNumber: entry.part.partNumber, description: entry.part.description, totalQuantity: 0, rejections: 0, reworks: 0 };
+        existing.reworks += entry.quantity;
+        existing.totalQuantity += entry.quantity;
+        map.set(key, existing);
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => b.totalQuantity - a.totalQuantity);
+  }, [analyticsRejectionEntries, analyticsReworkEntries, partTabFilters.type]);
+
+  const fallbackMonthData = useMemo(() => {
+    const map = new Map<string, { month: string; totalQuantity: number; rejections: number; reworks: number }>();
+    const addMonth = (dateValue: string | Date, quantity: number, isRework: boolean) => {
+      const date = new Date(dateValue);
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+      const label = date.toLocaleString("default", { month: "short", year: "numeric" });
+      const existing = map.get(key) || { month: label, totalQuantity: 0, rejections: 0, reworks: 0 };
+      existing.totalQuantity += quantity;
+      if (isRework) existing.reworks += quantity;
+      else existing.rejections += quantity;
+      map.set(key, existing);
+    };
+
+    if (!monthTabFilters.type || monthTabFilters.type === "rejection") {
+      for (const entry of analyticsRejectionEntries ?? []) addMonth(entry.date, entry.quantity, false);
+    }
+    if (!monthTabFilters.type || monthTabFilters.type === "rework") {
+      for (const entry of analyticsReworkEntries ?? []) addMonth(entry.date, entry.quantity, true);
+    }
+
+    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value);
+  }, [analyticsRejectionEntries, analyticsReworkEntries, monthTabFilters.type]);
+
+  const fallbackCostData = useMemo(() => {
+    const map = new Map<string, { partNumber: string; description: string | null; price: number; rejectionQty: number; reworkQty: number; rejectionCost: number; reworkCost: number; totalCost: number }>();
+
+    for (const entry of analyticsRejectionEntries ?? []) {
+      const key = entry.part.partNumber;
+      const price = Number(entry.part.price) || 0;
+      const existing = map.get(key) || { partNumber: entry.part.partNumber, description: entry.part.description, price, rejectionQty: 0, reworkQty: 0, rejectionCost: 0, reworkCost: 0, totalCost: 0 };
+      existing.rejectionQty += entry.quantity;
+      existing.rejectionCost += entry.quantity * price;
+      existing.totalCost = existing.rejectionCost + existing.reworkCost;
+      map.set(key, existing);
+    }
+
+    for (const entry of analyticsReworkEntries ?? []) {
+      const key = entry.part.partNumber;
+      const price = Number(entry.part.price) || 0;
+      const existing = map.get(key) || { partNumber: entry.part.partNumber, description: entry.part.description, price, rejectionQty: 0, reworkQty: 0, rejectionCost: 0, reworkCost: 0, totalCost: 0 };
+      existing.reworkQty += entry.quantity;
+      existing.reworkCost += entry.quantity * price;
+      existing.totalCost = existing.rejectionCost + existing.reworkCost;
+      map.set(key, existing);
+    }
+
+    return Array.from(map.values()).sort((a, b) => b.totalCost - a.totalCost);
+  }, [analyticsRejectionEntries, analyticsReworkEntries]);
+
+  const fallbackZoneData = useMemo(() => {
+    const map = new Map<string, { zone: string; totalQuantity: number; rejections: number; reworks: number }>();
+    const addZone = (zoneName: string, quantity: number, isRework: boolean) => {
+      const existing = map.get(zoneName) || { zone: zoneName, totalQuantity: 0, rejections: 0, reworks: 0 };
+      existing.totalQuantity += quantity;
+      if (isRework) existing.reworks += quantity;
+      else existing.rejections += quantity;
+      map.set(zoneName, existing);
+    };
+
+    for (const entry of zoneRejectionEntries ?? []) {
+      addZone(entry.zone?.name || "General", entry.quantity, false);
+    }
+    for (const entry of zoneReworkEntries ?? []) {
+      addZone(entry.zone?.name || "General", entry.quantity, true);
+    }
+
+    return Array.from(map.values()).sort((a, b) => b.totalQuantity - a.totalQuantity);
+  }, [zoneRejectionEntries, zoneReworkEntries]);
+
+  const effectivePartData = partData && partData.length > 0 ? partData : fallbackPartData;
+  const effectiveMonthData = monthData && monthData.length > 0 ? monthData : fallbackMonthData;
+  const effectiveCostData = costData && costData.length > 0 ? costData : fallbackCostData;
+  const effectiveZoneData = zoneData && zoneData.length > 0 ? zoneData : fallbackZoneData;
+
+  const isLoadingDashboardEntries = isLoadingAnalyticsRejections || isLoadingAnalyticsReworks;
+  const isLoadingZoneEntries = isLoadingZoneRejections || isLoadingZoneReworks;
 
   const overviewRejectedFromParts = overviewPartData?.reduce((s, r) => s + r.rejections, 0) ?? 0;
   const overviewReworkFromParts = overviewPartData?.reduce((s, r) => s + r.reworks, 0) ?? 0;
   const overviewRejectedFromSummary = summary?.reduce((s, r) => s + r.totalQuantity, 0) ?? 0;
   const overviewReworkFromMonth = monthData?.reduce((s, r) => s + r.reworks, 0) ?? 0;
-  const overviewTotalRejected = overviewRejectedFromParts > 0 ? overviewRejectedFromParts : overviewRejectedFromSummary;
-  const overviewTotalRework = overviewReworkFromParts > 0 ? overviewReworkFromParts : overviewReworkFromMonth;
+  const overviewTotalRejected = overviewRejectedFromParts > 0 ? overviewRejectedFromParts : (fallbackOverviewRejected > 0 ? fallbackOverviewRejected : overviewRejectedFromSummary);
+  const overviewTotalRework = overviewReworkFromParts > 0 ? overviewReworkFromParts : (fallbackOverviewRework > 0 ? fallbackOverviewRework : overviewReworkFromMonth);
 
   const rejectionWiseData = useMemo(() => {
     if (!summary) return [];
@@ -279,14 +391,14 @@ export default function Dashboard() {
   }, [rejectionWiseData, rejectionSearch]);
 
   const filteredPartData = useMemo(() => {
-    if (!partData) return [];
-    if (selectedPartNumbers.length === 0) return partData;
-    return partData.filter((p) => selectedPartNumbers.includes(p.partNumber));
-  }, [partData, selectedPartNumbers]);
+    if (!effectivePartData) return [];
+    if (selectedPartNumbers.length === 0) return effectivePartData;
+    return effectivePartData.filter((p) => selectedPartNumbers.includes(p.partNumber));
+  }, [effectivePartData, selectedPartNumbers]);
 
   const normalizedCostData = useMemo(() => {
-    if (!costData) return [];
-    return costData.map((row) => ({
+    if (!effectiveCostData) return [];
+    return effectiveCostData.map((row) => ({
       ...row,
       price: Number(row.price) || 0,
       rejectionQty: Number(row.rejectionQty) || 0,
@@ -295,7 +407,7 @@ export default function Dashboard() {
       reworkCost: Number(row.reworkCost) || 0,
       totalCost: Number(row.totalCost) || 0,
     }));
-  }, [costData]);
+  }, [effectiveCostData]);
 
   const filteredCostTableData = useMemo(() => {
     if (!normalizedCostData.length) return [];
@@ -382,7 +494,7 @@ export default function Dashboard() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-display font-bold text-amber-600">
-                  {isLoadingCost ? "..." : fmt(costData?.reduce((s, r) => s + r.rejectionCost, 0) ?? 0)}
+                  {isLoadingCost && isLoadingDashboardEntries ? "..." : fmt(normalizedCostData.reduce((s, r) => s + r.rejectionCost, 0))}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">Total cost of rejected pieces</p>
               </CardContent>
@@ -555,7 +667,7 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="h-[420px] w-full">
-                {isLoadingParts ? (
+                {isLoadingParts && isLoadingDashboardEntries ? (
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
                 ) : filteredPartData && filteredPartData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
@@ -760,11 +872,11 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="h-[420px] w-full">
-                {isLoadingMonths ? (
+                {isLoadingMonths && isLoadingDashboardEntries ? (
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
-                ) : monthData && monthData.length > 0 ? (
+                ) : effectiveMonthData && effectiveMonthData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={monthData} margin={{ top: 10, right: 20, left: -10, bottom: 10 }}>
+                    <LineChart data={effectiveMonthData} margin={{ top: 10, right: 20, left: -10, bottom: 10 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                       <XAxis dataKey="month" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
@@ -782,7 +894,7 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          {monthData && monthData.length > 0 && (
+          {effectiveMonthData && effectiveMonthData.length > 0 && (
             <Card className="shadow-sm border-border/50">
               <CardHeader><CardTitle>Monthly Summary Table</CardTitle></CardHeader>
               <CardContent>
@@ -797,7 +909,7 @@ export default function Dashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {[...monthData].reverse().map((row, i) => (
+                      {[...effectiveMonthData].reverse().map((row, i) => (
                         <tr key={i} className="border-b border-border/30 hover:bg-muted/30 transition-colors">
                           <td className="py-2 pr-4 font-medium">{row.month}</td>
                           <td className="py-2 pr-4 text-right text-destructive font-medium">{row.rejections}</td>
@@ -1004,11 +1116,11 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="h-[380px] w-full">
-                {isLoadingZone ? (
+                {isLoadingZone && isLoadingZoneEntries ? (
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
-                ) : zoneData && zoneData.length > 0 ? (
+                ) : effectiveZoneData && effectiveZoneData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={zoneData} margin={{ top: 10, right: 20, left: -10, bottom: 40 }}>
+                    <BarChart data={effectiveZoneData} margin={{ top: 10, right: 20, left: -10, bottom: 40 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                       <XAxis dataKey="zone" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} angle={-30} textAnchor="end" height={55} />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
@@ -1043,11 +1155,11 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="h-[380px] w-full">
-                {isLoadingZone ? (
+                {isLoadingZone && isLoadingZoneEntries ? (
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
-                ) : zoneData && zoneData.length > 0 ? (
+                ) : effectiveZoneData && effectiveZoneData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={zoneData} margin={{ top: 10, right: 20, left: -10, bottom: 40 }}>
+                    <LineChart data={effectiveZoneData} margin={{ top: 10, right: 20, left: -10, bottom: 40 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                       <XAxis dataKey="zone" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} angle={-30} textAnchor="end" height={55} />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
@@ -1068,7 +1180,7 @@ export default function Dashboard() {
           </Card>
           )}
 
-          {zoneData && zoneData.length > 0 && (
+          {effectiveZoneData && effectiveZoneData.length > 0 && (
             <Card className="shadow-sm border-border/50">
               <CardHeader><CardTitle>Zone Summary Table</CardTitle></CardHeader>
               <CardContent>
@@ -1083,7 +1195,7 @@ export default function Dashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {zoneData.map((row, i) => (
+                      {effectiveZoneData.map((row, i) => (
                         <tr key={i} className="border-b border-border/30 hover:bg-muted/30 transition-colors">
                           <td className="py-2 pr-4 font-medium">{row.zone}</td>
                           <td className="py-2 pr-4 text-right text-destructive font-medium">{row.rejections}</td>
@@ -1095,9 +1207,9 @@ export default function Dashboard() {
                     <tfoot>
                       <tr className="border-t-2 border-border/50 bg-muted/20">
                         <td className="py-2 pr-4 font-bold">Total</td>
-                        <td className="py-2 pr-4 text-right text-destructive font-bold">{zoneData.reduce((s, r) => s + r.rejections, 0)}</td>
-                        <td className="py-2 pr-4 text-right text-blue-500 font-bold">{zoneData.reduce((s, r) => s + r.reworks, 0)}</td>
-                        <td className="py-2 text-right font-bold text-primary">{zoneData.reduce((s, r) => s + r.totalQuantity, 0)}</td>
+                        <td className="py-2 pr-4 text-right text-destructive font-bold">{effectiveZoneData.reduce((s, r) => s + r.rejections, 0)}</td>
+                        <td className="py-2 pr-4 text-right text-blue-500 font-bold">{effectiveZoneData.reduce((s, r) => s + r.reworks, 0)}</td>
+                        <td className="py-2 text-right font-bold text-primary">{effectiveZoneData.reduce((s, r) => s + r.totalQuantity, 0)}</td>
                       </tr>
                     </tfoot>
                   </table>
