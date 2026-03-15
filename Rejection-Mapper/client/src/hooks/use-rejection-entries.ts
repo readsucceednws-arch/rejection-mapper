@@ -1,39 +1,35 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, RejectionEntryResponse } from "@shared/routes";
-import { z } from "zod";
+import type { ReworkEntryResponse, InsertReworkEntry } from "@shared/schema";
+import { api } from "@shared/routes";
 
-type EntryFilters = {
+interface ReworkFilters {
   startDate?: string;
   endDate?: string;
   partId?: number;
-  rejectionTypeId?: number;
-};
+  reworkTypeId?: number;
+}
 
-export function useRejectionEntries(filters?: EntryFilters) {
-  return useQuery({
-    queryKey: [api.rejectionEntries.list.path, filters],
+export function useReworkEntries(filters?: ReworkFilters) {
+  return useQuery<ReworkEntryResponse[]>({
+    queryKey: ["/api/rework-entries", filters],
     queryFn: async () => {
-      const url = new URL(api.rejectionEntries.list.path, window.location.origin);
-      if (filters?.startDate) url.searchParams.append("startDate", filters.startDate);
-      if (filters?.endDate) url.searchParams.append("endDate", filters.endDate);
-      if (filters?.partId) url.searchParams.append("partId", filters.partId.toString());
-      if (filters?.rejectionTypeId) url.searchParams.append("rejectionTypeId", filters.rejectionTypeId.toString());
-
+      const url = new URL("/api/rework-entries", window.location.origin);
+      if (filters?.startDate) url.searchParams.set("startDate", filters.startDate);
+      if (filters?.endDate) url.searchParams.set("endDate", filters.endDate);
+      if (filters?.partId) url.searchParams.set("partId", filters.partId.toString());
+      if (filters?.reworkTypeId) url.searchParams.set("reworkTypeId", filters.reworkTypeId.toString());
       const res = await fetch(url.toString(), { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch rejection entries");
-      
-      // Parse using the schema, and type assertion for the relations
-      const json = await res.json();
-      return api.rejectionEntries.list.responses[200].parse(json) as RejectionEntryResponse[];
+      if (!res.ok) throw new Error("Failed to fetch rework entries");
+      return res.json();
     },
   });
 }
 
-export function useUpdateRejectionEntry() {
+export function useUpdateReworkEntry() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, data }: { id: number; data: { rejectionTypeId?: number; quantity?: number; remarks?: string | null } }) => {
-      const res = await fetch(`/api/rejection-entries/${id}`, {
+    mutationFn: async ({ id, data }: { id: number; data: { reworkTypeId?: number; quantity?: number; remarks?: string | null } }) => {
+      const res = await fetch(`/api/rework-entries/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -41,22 +37,26 @@ export function useUpdateRejectionEntry() {
       });
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.message || "Failed to update entry");
+        throw new Error(err.message || "Failed to update rework entry");
       }
-      return res.json() as Promise<RejectionEntryResponse>;
+      return res.json() as Promise<ReworkEntryResponse>;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rework-entries"] });
       queryClient.invalidateQueries({ queryKey: [api.reports.summary.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/by-part"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/by-month"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/by-cost"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/by-zone"] });
     },
   });
 }
 
-export function useBulkDeleteRejectionEntries() {
+export function useBulkDeleteReworkEntries() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (ids: number[]) => {
-      const res = await fetch("/api/rejection-entries/bulk", {
+      const res = await fetch("/api/rework-entries/bulk", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),
@@ -69,36 +69,39 @@ export function useBulkDeleteRejectionEntries() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rework-entries"] });
       queryClient.invalidateQueries({ queryKey: [api.reports.summary.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/by-part"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/by-month"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/by-cost"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/by-zone"] });
     },
   });
 }
 
-export function useCreateRejectionEntry() {
+export function useCreateReworkEntry() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (data: z.infer<typeof api.rejectionEntries.create.input>) => {
-      const validated = api.rejectionEntries.create.input.parse(data);
-      const res = await fetch(api.rejectionEntries.create.path, {
-        method: api.rejectionEntries.create.method,
+    mutationFn: async (data: Omit<InsertReworkEntry, "date">) => {
+      const res = await fetch("/api/rework-entries", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(validated),
+        body: JSON.stringify(data),
         credentials: "include",
       });
-      
       if (!res.ok) {
-        if (res.status === 400) {
-          const err = await res.json();
-          throw new Error(err.message || "Validation error");
-        }
-        throw new Error("Failed to log rejection entry");
+        const err = await res.json();
+        throw new Error(err.message || "Failed to create rework entry");
       }
-      return api.rejectionEntries.create.responses[201].parse(await res.json()) as RejectionEntryResponse;
+      return res.json() as Promise<ReworkEntryResponse>;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/rework-entries"] });
       queryClient.invalidateQueries({ queryKey: [api.reports.summary.path] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/by-part"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/by-month"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/by-cost"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/analytics/by-zone"] });
     },
   });
 }
