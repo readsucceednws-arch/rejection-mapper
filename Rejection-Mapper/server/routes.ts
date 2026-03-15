@@ -14,6 +14,15 @@ function getOrgId(req: any): number {
   return user.organizationId;
 }
 
+function getParamString(param: string | string[] | undefined): string {
+  if (Array.isArray(param)) return param[0] ?? "";
+  return param ?? "";
+}
+
+function getParamId(param: string | string[] | undefined): number {
+  return Number.parseInt(getParamString(param), 10);
+}
+
 function isAdmin(req: any, res: any, next: any) {
   if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
   const user = req.user as User;
@@ -179,10 +188,11 @@ export async function registerRoutes(
   app.post("/api/invite", isAdmin, async (req, res, next) => {
     try {
       const { email } = z.object({ email: z.string().email("Invalid email address") }).parse(req.body);
-      const user = req.user as User;
-      const org = await storage.getOrganizationById(user.organizationId);
+      const inviter = req.user as User;
+      const orgId = getOrgId(req);
+      const org = await storage.getOrganizationById(orgId);
       if (!org) return res.status(404).json({ message: "Organisation not found" });
-      await sendInviteEmail(email, org.inviteCode, org.name, user.email);
+      await sendInviteEmail(email, org.inviteCode, org.name, inviter.email ?? "an administrator");
       res.json({ message: "Invite sent" });
     } catch (err) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
@@ -256,15 +266,15 @@ export async function registerRoutes(
   // --- MEMBERS ---
   app.get("/api/members", isAdmin, async (req, res, next) => {
     try {
-      const user = req.user as User;
-      const members = await storage.getUsersByOrganization(user.organizationId);
+      const orgId = getOrgId(req);
+      const members = await storage.getUsersByOrganization(orgId);
       res.json(members.map(({ password: _, ...m }) => m));
     } catch (err) { next(err); }
   });
 
   app.post("/api/members", isAdmin, async (req, res, next) => {
     try {
-      const user = req.user as User;
+      const orgId = getOrgId(req);
       const { email, username } = z.object({
         email: z.string().email("Enter a valid email address"),
         username: z.string().min(2, "Username must be at least 2 characters").regex(/^\S+$/, "Username cannot contain spaces"),
@@ -277,16 +287,16 @@ export async function registerRoutes(
 
       const { randomBytes } = await import("crypto");
       const tempPassword = await hashPassword(randomBytes(32).toString("hex"));
-      const newUser = await storage.createUser({ email, username, password: tempPassword, organizationId: user.organizationId });
+      const newUser = await storage.createUser({ email, username, password: tempPassword, organizationId: orgId });
 
       const token = await storage.createInviteToken(newUser.id);
-      const org = await storage.getOrganizationById(user.organizationId);
+      const org = await storage.getOrganizationById(orgId);
 
       try {
         await sendWorkerInviteEmail(email, username, token, org?.name ?? "your organisation");
       } catch (emailErr: any) {
         console.error("[email] Failed to send invite email:", emailErr?.message ?? emailErr);
-        await storage.deleteUser(newUser.id, user.organizationId);
+        await storage.deleteUser(newUser.id, orgId);
         return res.status(500).json({ message: emailErr?.message ?? "Failed to send invite email. Check that RESEND_API_KEY is configured." });
       }
 
@@ -301,9 +311,10 @@ export async function registerRoutes(
   app.delete("/api/members/:id", isAdmin, async (req, res, next) => {
     try {
       const user = req.user as User;
-      const memberId = parseInt(req.params.id, 10);
+      const orgId = getOrgId(req);
+      const memberId = getParamId(req.params.id);
       if (memberId === user.id) return res.status(400).json({ message: "You cannot remove yourself" });
-      await storage.deleteUser(memberId, user.organizationId);
+      await storage.deleteUser(memberId, orgId);
       res.json({ message: "Member removed" });
     } catch (err) { next(err); }
   });
@@ -311,7 +322,7 @@ export async function registerRoutes(
   app.patch("/api/members/:id/password", isAdmin, async (req, res, next) => {
     try {
       const user = req.user as User;
-      const memberId = parseInt(req.params.id, 10);
+      const memberId = getParamId(req.params.id);
       const { password } = z.object({
         password: z.string().min(6, "Password must be at least 6 characters"),
       }).parse(req.body);
@@ -372,7 +383,7 @@ export async function registerRoutes(
   app.put("/api/parts/:id", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const id = parseInt(req.params.id);
+      const id = getParamId(req.params.id);
       const input = api.parts.create.input.partial().parse(req.body);
       const updated = await storage.updatePart(id, orgId, input);
       res.json(updated);
@@ -396,7 +407,7 @@ export async function registerRoutes(
 
   app.delete("/api/parts/:id", isAuthenticated, async (req, res) => {
     const orgId = getOrgId(req);
-    await storage.deletePart(parseInt(req.params.id), orgId);
+    await storage.deletePart(getParamId(req.params.id), orgId);
     res.status(204).end();
   });
 
@@ -424,7 +435,7 @@ export async function registerRoutes(
   app.put("/api/rejection-types/:id", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const id = parseInt(req.params.id);
+      const id = getParamId(req.params.id);
       const input = api.rejectionTypes.create.input.partial().parse(req.body);
       const updated = await storage.updateRejectionType(id, orgId, input);
       res.json(updated);
@@ -448,7 +459,7 @@ export async function registerRoutes(
 
   app.delete("/api/rejection-types/:id", isAuthenticated, async (req, res) => {
     const orgId = getOrgId(req);
-    await storage.deleteRejectionType(parseInt(req.params.id), orgId);
+    await storage.deleteRejectionType(getParamId(req.params.id), orgId);
     res.status(204).end();
   });
 
@@ -528,7 +539,7 @@ export async function registerRoutes(
   app.patch("/api/rejection-entries/:id", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const id = parseInt(req.params.id);
+      const id = getParamId(req.params.id);
       const data = z.object({
         rejectionTypeId: z.number().int().positive().optional(),
         quantity: z.number().int().positive().optional(),
@@ -545,7 +556,7 @@ export async function registerRoutes(
   app.patch("/api/rework-entries/:id", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const id = parseInt(req.params.id);
+      const id = getParamId(req.params.id);
       const data = z.object({
         reworkTypeId: z.number().int().positive().optional(),
         quantity: z.number().int().positive().optional(),
@@ -570,7 +581,12 @@ export async function registerRoutes(
     try {
       const orgId = getOrgId(req);
       const { insertReworkTypeSchema } = await import("@shared/schema");
-      const input = insertReworkTypeSchema.parse(req.body);
+      const parsed = insertReworkTypeSchema.parse(req.body);
+      const input = {
+        reworkCode: parsed.reworkCode,
+        reason: parsed.reason,
+        zone: parsed.zone,
+      };
       const created = await storage.createReworkType({ ...input, organizationId: orgId });
       res.status(201).json(created);
     } catch (err) {
@@ -584,9 +600,14 @@ export async function registerRoutes(
   app.put("/api/rework-types/:id", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const id = parseInt(req.params.id);
+      const id = getParamId(req.params.id);
       const { insertReworkTypeSchema } = await import("@shared/schema");
-      const input = insertReworkTypeSchema.partial().parse(req.body);
+      const parsed = insertReworkTypeSchema.partial().parse(req.body);
+      const input = {
+        ...(parsed.reworkCode !== undefined ? { reworkCode: parsed.reworkCode } : {}),
+        ...(parsed.reason !== undefined ? { reason: parsed.reason } : {}),
+        ...(parsed.zone !== undefined ? { zone: parsed.zone } : {}),
+      };
       const updated = await storage.updateReworkType(id, orgId, input);
       res.json(updated);
     } catch (err) {
@@ -609,7 +630,7 @@ export async function registerRoutes(
 
   app.delete("/api/rework-types/:id", isAuthenticated, async (req, res) => {
     const orgId = getOrgId(req);
-    await storage.deleteReworkType(parseInt(req.params.id), orgId);
+    await storage.deleteReworkType(getParamId(req.params.id), orgId);
     res.status(204).end();
   });
 
@@ -684,10 +705,11 @@ export async function registerRoutes(
     try {
       const orgId = getOrgId(req);
       const params = req.query;
+      const typeParam = Array.isArray(params.type) ? params.type[0] : params.type;
       const filters = {
         startDate: params.startDate as string | undefined,
         endDate: params.endDate as string | undefined,
-        type: params.type as string | undefined,
+        type: typeParam === "all" ? undefined : (typeParam as string | undefined),
       };
       const data = await storage.getPartWiseSummary(orgId, filters);
       res.json(data);
@@ -700,10 +722,11 @@ export async function registerRoutes(
     try {
       const orgId = getOrgId(req);
       const params = req.query;
+      const typeParam = Array.isArray(params.type) ? params.type[0] : params.type;
       const filters = {
         startDate: params.startDate as string | undefined,
         endDate: params.endDate as string | undefined,
-        type: params.type as string | undefined,
+        type: typeParam === "all" ? undefined : (typeParam as string | undefined),
       };
       const data = await storage.getMonthWiseSummary(orgId, filters);
       res.json(data);
@@ -771,7 +794,7 @@ export async function registerRoutes(
   app.put("/api/zones/:id", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const id = parseInt(req.params.id);
+      const id = getParamId(req.params.id);
       const { name } = req.body;
       if (!name || typeof name !== "string") {
         return res.status(400).json({ message: "Zone name is required" });
@@ -789,7 +812,7 @@ export async function registerRoutes(
   app.delete("/api/zones/:id", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      await storage.deleteZone(parseInt(req.params.id), orgId);
+      await storage.deleteZone(getParamId(req.params.id), orgId);
       res.status(204).end();
     } catch (err) {
       res.status(500).json({ message: "Internal server error" });
