@@ -69,11 +69,7 @@ function RejectionTypeForm({
           </FormItem>
         )} />
         <FormField control={form.control} name="reason" render={({ field }) => (
-          <FormItem>
-            <FormLabel>Description</FormLabel>
-            <FormControl><Input placeholder="e.g. Dimensional out of spec" {...field} value={field.value || ""} data-testid="input-rejection-reason" /></FormControl>
-            <FormMessage />
-          </FormItem>
+          <input type="hidden" {...field} value={field.value || ""} />
         )} />
         <FormField control={form.control} name="type" render={({ field }) => {
           const currentVal = isLegacyType(field.value) ? NONE_VALUE : (field.value || NONE_VALUE);
@@ -146,8 +142,7 @@ export default function ManageRejectionTypes() {
   const [showBulkConfirm, setShowBulkConfirm] = useState(false);
 
   const filtered = (types ?? []).filter((t) =>
-    t.rejectionCode.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    t.reason.toLowerCase().includes(searchTerm.toLowerCase())
+    t.rejectionCode.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const allSelected = filtered.length > 0 && filtered.every((t) => selectedIds.has(t.id));
@@ -170,7 +165,7 @@ export default function ManageRejectionTypes() {
   };
 
   const handleCreate = (data: FormValues) => {
-    createMutation.mutate(data, {
+    createMutation.mutate({ ...data, reason: data.rejectionCode }, {
       onSuccess: () => {
         toast({ title: "Type Created", description: "Successfully added new rejection type." });
         setIsAddOpen(false);
@@ -181,7 +176,7 @@ export default function ManageRejectionTypes() {
 
   const handleUpdate = (data: FormValues) => {
     if (!editType) return;
-    updateMutation.mutate({ id: editType.id, data }, {
+    updateMutation.mutate({ id: editType.id, data: { ...data, reason: data.rejectionCode } }, {
       onSuccess: () => {
         toast({ title: "Type Updated", description: "Changes have been saved." });
         setEditType(null);
@@ -281,14 +276,13 @@ export default function ManageRejectionTypes() {
                   </TableHead>
                 )}
                 <TableHead>Code</TableHead>
-                <TableHead>Description</TableHead>
                 <TableHead>Zone</TableHead>
                 <TableHead className="w-[80px]"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={isAdmin ? 5 : 4} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={isAdmin ? 4 : 3} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>
               ) : filtered.length > 0 ? (
                 filtered.map((t) => (
                   <TableRow
@@ -311,7 +305,6 @@ export default function ManageRejectionTypes() {
                         {t.rejectionCode}
                       </Badge>
                     </TableCell>
-                    <TableCell className="font-medium">{t.reason || "—"}</TableCell>
                     <TableCell>
                       {isLegacyType(t.type) ? (
                         <span className="text-muted-foreground text-sm">—</span>
@@ -335,7 +328,7 @@ export default function ManageRejectionTypes() {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={isAdmin ? 5 : 4} className="text-center py-12">
+                  <TableCell colSpan={isAdmin ? 4 : 3} className="text-center py-12">
                     <div className="flex flex-col items-center justify-center text-muted-foreground">
                       <AlertTriangle className="h-8 w-8 mb-2 opacity-20" /><p>No rejection types found</p>
                     </div>
@@ -358,7 +351,7 @@ export default function ManageRejectionTypes() {
             <RejectionTypeForm
               defaultValues={{
                 rejectionCode: editType.rejectionCode,
-                reason: editType.reason || "",
+                reason: editType.reason || editType.rejectionCode,
                 type: isLegacyType(editType.type) ? "" : (editType.type || ""),
               }}
               onSubmit={handleUpdate}
