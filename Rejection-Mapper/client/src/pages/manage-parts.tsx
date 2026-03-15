@@ -55,13 +55,6 @@ function PartForm({
             <FormMessage />
           </FormItem>
         )} />
-        <FormField control={form.control} name="description" render={({ field }) => (
-          <FormItem>
-            <FormLabel>Description (Optional)</FormLabel>
-            <FormControl><Input placeholder="Brief description of the part" {...field} value={field.value || ""} data-testid="input-part-description" /></FormControl>
-            <FormMessage />
-          </FormItem>
-        )} />
         <FormField control={form.control} name="price" render={({ field }) => (
           <FormItem>
             <FormLabel>Price *</FormLabel>
@@ -103,8 +96,7 @@ export default function ManageParts() {
   const [showBulkConfirm, setShowBulkConfirm] = useState(false);
 
   const filteredParts = (parts ?? []).filter(p =>
-    p.partNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (p.description && p.description.toLowerCase().includes(searchTerm.toLowerCase()))
+    p.partNumber.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const allSelected = filteredParts.length > 0 && filteredParts.every((p) => selectedIds.has(p.id));
@@ -203,7 +195,7 @@ export default function ManageParts() {
                 <DialogDescription>Create a new part number for the rejection logger.</DialogDescription>
               </DialogHeader>
               <PartForm
-                defaultValues={{ partNumber: "", description: "", price: 0 }}
+                defaultValues={{ partNumber: "", price: 0 }}
                 onSubmit={handleCreate}
                 isPending={createMutation.isPending}
                 onCancel={() => setIsAddOpen(false)}
@@ -237,14 +229,13 @@ export default function ManageParts() {
                   </TableHead>
                 )}
                 <TableHead>Part Number</TableHead>
-                <TableHead>Description</TableHead>
                 <TableHead className="text-right">Price</TableHead>
                 <TableHead className="w-[100px]"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={isAdmin ? 5 : 4} className="text-center py-8 text-muted-foreground">Loading parts...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={isAdmin ? 4 : 3} className="text-center py-8 text-muted-foreground">Loading parts...</TableCell></TableRow>
               ) : filteredParts.length > 0 ? (
                 filteredParts.map((part) => (
                   <TableRow
@@ -265,7 +256,6 @@ export default function ManageParts() {
                     <TableCell className="font-semibold text-primary">
                       <div className="flex items-center gap-2"><Package className="w-4 h-4 text-muted-foreground" />{part.partNumber}</div>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{part.description || "—"}</TableCell>
                     <TableCell className="text-right font-medium">₹{Number(part.price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1 justify-end">
@@ -281,7 +271,7 @@ export default function ManageParts() {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={isAdmin ? 5 : 4} className="text-center py-12">
+                  <TableCell colSpan={isAdmin ? 4 : 3} className="text-center py-12">
                     <div className="flex flex-col items-center justify-center text-muted-foreground">
                       <Package className="h-8 w-8 mb-2 opacity-20" /><p>No parts found</p>
                     </div>
@@ -302,7 +292,7 @@ export default function ManageParts() {
           </DialogHeader>
           {editPart && (
             <PartForm
-              defaultValues={{ partNumber: editPart.partNumber, description: editPart.description || "", price: Number(editPart.price) }}
+              defaultValues={{ partNumber: editPart.partNumber, price: Number(editPart.price) }}
               onSubmit={handleUpdate}
               isPending={updateMutation.isPending}
               onCancel={() => setEditPart(null)}
