@@ -34,6 +34,18 @@ function generateInviteCode(): string {
   return crypto.randomBytes(4).toString("hex").toUpperCase();
 }
 
+function getStartOfDay(dateStr: string): Date {
+  const date = new Date(dateStr);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function getEndOfDay(dateStr: string): Date {
+  const date = new Date(dateStr);
+  date.setHours(23, 59, 59, 999);
+  return date;
+}
+
 export interface IStorage {
   // Organizations
   createOrganization(name: string): Promise<Organization>;
@@ -211,8 +223,8 @@ export class DatabaseStorage implements IStorage {
 
   async getRejectionEntries(organizationId: number, filters?: { startDate?: string; endDate?: string; partId?: number; rejectionTypeId?: number; type?: string }): Promise<RejectionEntryResponse[]> {
     const conditions = [eq(rejectionEntries.organizationId, organizationId)];
-    if (filters?.startDate) conditions.push(gte(rejectionEntries.date, new Date(filters.startDate)));
-    if (filters?.endDate) conditions.push(lte(rejectionEntries.date, new Date(filters.endDate)));
+    if (filters?.startDate) conditions.push(gte(rejectionEntries.date, getStartOfDay(filters.startDate)));
+    if (filters?.endDate) conditions.push(lte(rejectionEntries.date, getEndOfDay(filters.endDate)));
     if (filters?.partId) conditions.push(eq(rejectionEntries.partId, filters.partId));
     if (filters?.rejectionTypeId) conditions.push(eq(rejectionEntries.rejectionTypeId, filters.rejectionTypeId));
 
@@ -298,8 +310,8 @@ export class DatabaseStorage implements IStorage {
 
   async getReworkEntries(organizationId: number, filters?: { startDate?: string; endDate?: string; partId?: number; reworkTypeId?: number }): Promise<ReworkEntryResponse[]> {
     const conditions = [eq(reworkEntries.organizationId, organizationId)];
-    if (filters?.startDate) conditions.push(gte(reworkEntries.date, new Date(filters.startDate)));
-    if (filters?.endDate) conditions.push(lte(reworkEntries.date, new Date(filters.endDate)));
+    if (filters?.startDate) conditions.push(gte(reworkEntries.date, getStartOfDay(filters.startDate)));
+    if (filters?.endDate) conditions.push(lte(reworkEntries.date, getEndOfDay(filters.endDate)));
     if (filters?.partId) conditions.push(eq(reworkEntries.partId, filters.partId));
     if (filters?.reworkTypeId) conditions.push(eq(reworkEntries.reworkTypeId, filters.reworkTypeId));
 
