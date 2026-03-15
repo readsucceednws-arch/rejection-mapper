@@ -45,6 +45,8 @@ export function usePartWiseAnalytics(filters: AnalyticsFilters = {}) {
   const qs = buildQuery(filters);
   return useQuery<PartWiseData[]>({
     queryKey: ["/api/analytics/by-part", filters],
+    staleTime: 0,
+    refetchOnMount: "always",
     queryFn: async () => {
       const res = await fetch(`/api/analytics/by-part${qs}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch part analytics");
@@ -57,6 +59,8 @@ export function useMonthWiseAnalytics(filters: AnalyticsFilters = {}) {
   const qs = buildQuery(filters);
   return useQuery<MonthWiseData[]>({
     queryKey: ["/api/analytics/by-month", filters],
+    staleTime: 0,
+    refetchOnMount: "always",
     queryFn: async () => {
       const res = await fetch(`/api/analytics/by-month${qs}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch monthly analytics");
@@ -69,6 +73,8 @@ export function useCostAnalytics(filters: AnalyticsFilters = {}) {
   const qs = buildQuery(filters);
   return useQuery<CostData[]>({
     queryKey: ["/api/analytics/by-cost", filters],
+    staleTime: 0,
+    refetchOnMount: "always",
     queryFn: async () => {
       const res = await fetch(`/api/analytics/by-cost${qs}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch cost analytics");
@@ -91,6 +97,8 @@ export function useZoneWiseAnalytics(filters: Omit<AnalyticsFilters, "type"> = {
   const qs = params.toString() ? `?${params.toString()}` : "";
   return useQuery<ZoneWiseData[]>({
     queryKey: ["/api/analytics/by-zone", filters],
+    staleTime: 0,
+    refetchOnMount: "always",
     queryFn: async () => {
       const res = await fetch(`/api/analytics/by-zone${qs}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch zone analytics");
