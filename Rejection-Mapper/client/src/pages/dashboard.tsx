@@ -19,6 +19,7 @@ import {
 import {
   BarChart,
   Bar,
+  LabelList,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -246,8 +247,12 @@ export default function Dashboard() {
   const { data: allParts } = useParts();
   const { data: rejectionTypes } = useRejectionTypes();
 
-  const overviewTotalRejected = overviewPartData?.reduce((s, r) => s + r.rejections, 0) ?? 0;
-  const overviewTotalRework = overviewPartData?.reduce((s, r) => s + r.reworks, 0) ?? 0;
+  const overviewRejectedFromParts = overviewPartData?.reduce((s, r) => s + r.rejections, 0) ?? 0;
+  const overviewReworkFromParts = overviewPartData?.reduce((s, r) => s + r.reworks, 0) ?? 0;
+  const overviewRejectedFromSummary = summary?.reduce((s, r) => s + r.totalQuantity, 0) ?? 0;
+  const overviewReworkFromMonth = monthData?.reduce((s, r) => s + r.reworks, 0) ?? 0;
+  const overviewTotalRejected = overviewRejectedFromParts > 0 ? overviewRejectedFromParts : overviewRejectedFromSummary;
+  const overviewTotalRework = overviewReworkFromParts > 0 ? overviewReworkFromParts : overviewReworkFromMonth;
 
   const rejectionWiseData = useMemo(() => {
     if (!summary) return [];
@@ -473,6 +478,7 @@ export default function Dashboard() {
                           {summary.map((_, index) => (
                             <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                           ))}
+                          <LabelList dataKey="totalQuantity" position="top" className="fill-muted-foreground" fontSize={10} />
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
@@ -567,8 +573,12 @@ export default function Dashboard() {
                         }}
                       />
                       <Legend formatter={(value) => <span className="text-xs capitalize">{value === "rejections" ? "Rejections" : "Reworks"}</span>} />
-                      <Bar dataKey="rejections" name="rejections" stackId="a" fill={REJECTION_COLOR} />
-                      <Bar dataKey="reworks" name="reworks" stackId="a" fill={REWORK_COLOR} radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="rejections" name="rejections" stackId="a" fill={REJECTION_COLOR}>
+                        <LabelList dataKey="rejections" position="top" className="fill-muted-foreground" fontSize={10} />
+                      </Bar>
+                      <Bar dataKey="reworks" name="reworks" stackId="a" fill={REWORK_COLOR} radius={[4, 4, 0, 0]}>
+                        <LabelList dataKey="reworks" position="top" className="fill-muted-foreground" fontSize={10} />
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
@@ -670,6 +680,7 @@ export default function Dashboard() {
                         {rejectionWiseData.slice(0, 15).map((_, index) => (
                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                         ))}
+                        <LabelList dataKey="totalQuantity" position="right" className="fill-muted-foreground" fontSize={10} />
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
@@ -870,8 +881,12 @@ export default function Dashboard() {
                         }}
                       />
                       <Legend formatter={(value) => <span className="text-xs">{value === "rejectionCost" ? "Rejection Cost" : "Rework Cost"}</span>} />
-                      <Bar dataKey="rejectionCost" name="rejectionCost" stackId="a" fill={REJECTION_COLOR} />
-                      <Bar dataKey="reworkCost" name="reworkCost" stackId="a" fill={REWORK_COLOR} radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="rejectionCost" name="rejectionCost" stackId="a" fill={REJECTION_COLOR}>
+                        <LabelList dataKey="rejectionCost" position="top" className="fill-muted-foreground" fontSize={10} formatter={(v: number) => `₹${Math.round(Number(v) || 0)}`} />
+                      </Bar>
+                      <Bar dataKey="reworkCost" name="reworkCost" stackId="a" fill={REWORK_COLOR} radius={[4, 4, 0, 0]}>
+                        <LabelList dataKey="reworkCost" position="top" className="fill-muted-foreground" fontSize={10} formatter={(v: number) => `₹${Math.round(Number(v) || 0)}`} />
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
@@ -1003,8 +1018,12 @@ export default function Dashboard() {
                         formatter={(value, name) => [value, name === "rejections" ? "Rejections" : "Reworks"]}
                       />
                       <Legend formatter={(value) => <span className="text-xs capitalize">{value === "rejections" ? "Rejections" : "Reworks"}</span>} />
-                      <Bar dataKey="rejections" name="rejections" stackId="a" fill={REJECTION_COLOR} />
-                      <Bar dataKey="reworks" name="reworks" stackId="a" fill={REWORK_COLOR} radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="rejections" name="rejections" stackId="a" fill={REJECTION_COLOR}>
+                        <LabelList dataKey="rejections" position="top" className="fill-muted-foreground" fontSize={10} />
+                      </Bar>
+                      <Bar dataKey="reworks" name="reworks" stackId="a" fill={REWORK_COLOR} radius={[4, 4, 0, 0]}>
+                        <LabelList dataKey="reworks" position="top" className="fill-muted-foreground" fontSize={10} />
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
