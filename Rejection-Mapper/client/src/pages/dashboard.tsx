@@ -1007,7 +1007,7 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          {costData && costData.length > 0 && (
+          {effectiveCostData && effectiveCostData.length > 0 && (
             <Card className="shadow-sm border-border/50">
               <CardHeader className="flex flex-row items-center justify-between flex-wrap gap-3">
                 <CardTitle>Cost Breakdown Table</CardTitle>
