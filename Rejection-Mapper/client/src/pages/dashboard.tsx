@@ -493,9 +493,9 @@ export default function Dashboard() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-display font-bold text-amber-600">
-                  {isLoadingCost && isLoadingDashboardEntries ? "..." : fmt(normalizedCostData.reduce((s, r) => s + r.rejectionCost, 0))}
+                  {isLoadingCost && isLoadingDashboardEntries ? "..." : fmt(grandTotalCost)}
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">Total cost of rejected pieces</p>
+                <p className="text-xs text-muted-foreground mt-1">Combined rejection + rework cost</p>
               </CardContent>
             </Card>
           </div>
