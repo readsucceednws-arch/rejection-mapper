@@ -223,7 +223,7 @@ export async function registerRoutes(
 
   app.get("/api/invite/:token", async (req, res, next) => {
     try {
-      const { token } = req.params;
+      const token = String(req.params.token ?? "").trim();
       const user = await storage.getUserByInviteToken(token);
       if (!user) return res.status(400).json({ message: "This invite link is invalid or has expired." });
       const org = await storage.getOrganizationById(user.organizationId!);
@@ -233,10 +233,11 @@ export async function registerRoutes(
 
   app.post("/api/activate", async (req, res, next) => {
     try {
-      const { token, password } = z.object({
+      const { token: rawToken, password } = z.object({
         token: z.string().min(1),
         password: z.string().min(6, "Password must be at least 6 characters"),
       }).parse(req.body);
+      const token = rawToken.trim();
 
       const user = await storage.getUserByInviteToken(token);
       if (!user) return res.status(400).json({ message: "This invite link is invalid or has expired. Ask your admin to resend the invite." });
