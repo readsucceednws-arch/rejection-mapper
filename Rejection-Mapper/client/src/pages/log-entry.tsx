@@ -36,7 +36,17 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Save, AlertCircle, Plus, Trash2, Upload, ChevronDown, Package, AlertTriangle, RefreshCw } from "lucide-react";
+import { Save, AlertCircle, Plus, Trash2, Upload, ChevronDown, Package, AlertTriangle, RefreshCw, Check, ChevronsUpDown } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { cn } from "@/lib/utils";
 
 interface EntryItem {
   id: string;
@@ -91,6 +101,8 @@ export default function LogEntry() {
   });
   const [refOpen, setRefOpen] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [partOpen, setPartOpen] = useState(false);
+  const [codeOpen, setCodeOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: parts, isLoading: isLoadingParts } = useParts();
@@ -306,31 +318,75 @@ export default function LogEntry() {
               <FormField
                 control={form.control}
                 name="partId"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Part Number *</FormLabel>
-                    <Select
-                      disabled={isLoadingParts}
-                      onValueChange={field.onChange}
-                      value={field.value ? field.value.toString() : ""}
-                    >
-                      <FormControl>
-                        <SelectTrigger className="bg-background focus:ring-primary/20" data-testid="select-part">
-                          <SelectValue placeholder="Select a part..." />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {parts?.map((part) => (
-                          <SelectItem key={part.id} value={part.id.toString()}>
-                            <span className="font-medium">{part.partNumber}</span>
-                            {part.description && <span className="text-muted-foreground ml-2">- {part.description}</span>}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
+                render={({ field }) => {
+                  const selectedPart = parts?.find((p) => p.id === Number(field.value));
+                  return (
+                    <FormItem className="flex flex-col">
+                      <FormLabel>Part Number *</FormLabel>
+                      <Popover open={partOpen} onOpenChange={setPartOpen}>
+                        <PopoverTrigger asChild>
+                          <FormControl>
+                            <Button
+                              variant="outline"
+                              role="combobox"
+                              aria-expanded={partOpen}
+                              disabled={isLoadingParts}
+                              data-testid="select-part"
+                              className={cn(
+                                "w-full justify-between font-normal bg-background focus:ring-primary/20",
+                                !field.value && "text-muted-foreground"
+                              )}
+                            >
+                              {selectedPart ? (
+                                <span>
+                                  <span className="font-medium">{selectedPart.partNumber}</span>
+                                  {selectedPart.description && (
+                                    <span className="text-muted-foreground ml-2">- {selectedPart.description}</span>
+                                  )}
+                                </span>
+                              ) : (
+                                "Select a part..."
+                              )}
+                              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                            </Button>
+                          </FormControl>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                          <Command>
+                            <CommandInput placeholder="Search by part number or description..." />
+                            <CommandList>
+                              <CommandEmpty>No part found.</CommandEmpty>
+                              <CommandGroup>
+                                {parts?.map((part) => (
+                                  <CommandItem
+                                    key={part.id}
+                                    value={`${part.partNumber} ${part.description ?? ""}`}
+                                    onSelect={() => {
+                                      field.onChange(part.id.toString());
+                                      setPartOpen(false);
+                                    }}
+                                  >
+                                    <Check
+                                      className={cn(
+                                        "mr-2 h-4 w-4 shrink-0",
+                                        Number(field.value) === part.id ? "opacity-100" : "opacity-0"
+                                      )}
+                                    />
+                                    <span className="font-medium">{part.partNumber}</span>
+                                    {part.description && (
+                                      <span className="text-muted-foreground ml-2 truncate">- {part.description}</span>
+                                    )}
+                                  </CommandItem>
+                                ))}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                      <FormMessage />
+                    </FormItem>
+                  );
+                }}
               />
 
               <FormField
@@ -416,28 +472,81 @@ export default function LogEntry() {
 
                     <div>
                       <label className="text-xs font-medium text-muted-foreground">Rejection Code *</label>
-                      <Select
-                        value={newEntry.rejectionTypeId ? newEntry.rejectionTypeId.toString() : ""}
-                        onValueChange={(value) => setNewEntry({ ...newEntry, rejectionTypeId: parseInt(value) })}
-                      >
-                        <SelectTrigger className="h-8 text-sm mt-1 bg-background focus:ring-primary/20" data-testid="select-reason">
-                          <SelectValue placeholder="Select code..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {newEntry.purpose === "rejection"
-                            ? rejectionTypes?.map((type) => (
-                                <SelectItem key={type.id} value={type.id.toString()}>
-                                  <span className="font-mono font-medium">{type.rejectionCode}</span>
-                                </SelectItem>
-                              ))
-                            : reworkTypes?.map((type) => (
-                                <SelectItem key={type.id} value={type.id.toString()}>
-                                  <span className="font-mono font-medium">{type.reworkCode}</span>
-                                </SelectItem>
-                              ))
-                          }
-                        </SelectContent>
-                      </Select>
+                      {(() => {
+                        const codeOptions =
+                          newEntry.purpose === "rejection"
+                            ? (rejectionTypes ?? []).map((t) => ({
+                                id: t.id,
+                                code: t.rejectionCode,
+                                reason: t.reason,
+                              }))
+                            : (reworkTypes ?? []).map((t) => ({
+                                id: t.id,
+                                code: t.reworkCode,
+                                reason: t.reason,
+                              }));
+                        const selectedOption = codeOptions.find((o) => o.id === newEntry.rejectionTypeId);
+                        return (
+                          <Popover open={codeOpen} onOpenChange={setCodeOpen}>
+                            <PopoverTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                role="combobox"
+                                aria-expanded={codeOpen}
+                                data-testid="select-reason"
+                                className={cn(
+                                  "w-full h-8 text-sm mt-1 justify-between font-normal bg-background focus:ring-primary/20",
+                                  !selectedOption && "text-muted-foreground"
+                                )}
+                              >
+                                {selectedOption ? (
+                                  <span>
+                                    <span className="font-mono font-medium">{selectedOption.code}</span>
+                                    {selectedOption.reason && (
+                                      <span className="text-muted-foreground ml-1 truncate"> – {selectedOption.reason}</span>
+                                    )}
+                                  </span>
+                                ) : (
+                                  "Select code..."
+                                )}
+                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                              <Command>
+                                <CommandInput placeholder="Search code or reason..." />
+                                <CommandList>
+                                  <CommandEmpty>No code found.</CommandEmpty>
+                                  <CommandGroup>
+                                    {codeOptions.map((opt) => (
+                                      <CommandItem
+                                        key={opt.id}
+                                        value={`${opt.code} ${opt.reason ?? ""}`}
+                                        onSelect={() => {
+                                          setNewEntry({ ...newEntry, rejectionTypeId: opt.id });
+                                          setCodeOpen(false);
+                                        }}
+                                      >
+                                        <Check
+                                          className={cn(
+                                            "mr-2 h-4 w-4 shrink-0",
+                                            newEntry.rejectionTypeId === opt.id ? "opacity-100" : "opacity-0"
+                                          )}
+                                        />
+                                        <span className="font-mono font-medium">{opt.code}</span>
+                                        {opt.reason && (
+                                          <span className="text-muted-foreground ml-2 truncate">– {opt.reason}</span>
+                                        )}
+                                      </CommandItem>
+                                    ))}
+                                  </CommandGroup>
+                                </CommandList>
+                              </Command>
+                            </PopoverContent>
+                          </Popover>
+                        );
+                      })()}
                     </div>
 
                     <div>
