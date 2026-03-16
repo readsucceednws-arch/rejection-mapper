@@ -100,10 +100,11 @@ export default function LoginPage() {
     }
     const inviteTok = params.get("invite_token");
     if (inviteTok) {
-      setInviteToken(inviteTok);
+      const cleanedInviteToken = inviteTok.trim();
+      setInviteToken(cleanedInviteToken);
       setMode("accept-invite");
       window.history.replaceState({}, "", window.location.pathname);
-      fetch(`/api/invite/${inviteTok}`)
+      fetch(`/api/invite/${encodeURIComponent(cleanedInviteToken)}`)
         .then(async (r) => {
           if (!r.ok) {
             const err = await r.json();
