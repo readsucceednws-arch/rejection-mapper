@@ -64,7 +64,7 @@ A manufacturing parts rejection tracking web app built with React, Express, and 
 - **Password reset**: Secure token-based reset links via Resend (1-hour expiry).
 - **Resend is required for worker invites**: If `RESEND_API_KEY` is not configured, the Add Member action returns a clear error to the admin — it does not silently fail.
 - **Password reset fallback**: If no `RESEND_API_KEY`, reset links are printed to server console (dev mode).
-- Set `RESEND_FROM_EMAIL` secret to customize the from address.
+- Set `EMAIL_FROM` (preferred) or `RESEND_FROM_EMAIL` secret to customize the from address.
 - Public API routes: `GET /api/invite/:token` (validate token), `POST /api/activate` (set password + sign in).
 
 ## Existing Data
