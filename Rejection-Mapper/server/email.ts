@@ -24,6 +24,31 @@ function assertResendConfigured(): void {
   }
 }
 
+async function sendResendEmail({
+  to,
+  subject,
+  html,
+}: {
+  to: string;
+  subject: string;
+  html: string;
+}) {
+  assertResendConfigured();
+
+  const result = await resend!.emails.send({
+    from: getFromAddress(),
+    to,
+    subject,
+    html,
+  });
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  return result.data;
+}
+
 export async function sendWorkerInviteEmail(
   toEmail: string,
   username: string,
@@ -32,12 +57,9 @@ export async function sendWorkerInviteEmail(
 ): Promise<void> {
   const activateUrl = `${getAppUrl()}/?invite_token=${token}`;
 
-  assertResendConfigured();
-
   console.log(`[email] Sending worker invite to ${toEmail} (username: ${username})`);
 
-  const result = await resend!.emails.send({
-    from: getFromAddress(),
+  const data = await sendResendEmail({
     to: toEmail,
     subject: `You've been added to ${orgName} on RejectMap`,
     html: `
@@ -65,25 +87,18 @@ export async function sendWorkerInviteEmail(
     `,
   });
 
-  if (result.error) {
-    console.error(`[email] Resend error for ${toEmail}:`, result.error);
-    throw new Error(`Failed to send invite email: ${result.error.message}`);
-  }
-
-  console.log(`[email] Worker invite sent to ${toEmail} (id: ${result.data?.id})`);
+  console.log(`[email] Worker invite sent to ${toEmail} (id: ${data?.id})`);
 }
 
 export async function sendInviteEmail(toEmail: string, inviteCode: string, orgName: string, inviterEmail: string): Promise<void> {
   const joinUrl = `${getAppUrl()}/?join=1`;
-  const fromAddress = getFromAddress();
 
   if (!resend) {
     console.log(`[DEV] Invite for ${toEmail} to join "${orgName}" with code: ${inviteCode}`);
     return;
   }
 
-  await resend.emails.send({
-    from: fromAddress,
+  await sendResendEmail({
     to: toEmail,
     subject: `You've been invited to join ${orgName} on RejectMap`,
     html: `
@@ -117,12 +132,9 @@ export async function sendPasswordResetEmail(toEmail: string, token: string): Pr
     return;
   }
 
-  const fromAddress = getFromAddress();
-
   console.log(`[email] Sending password reset to ${toEmail}`);
 
-  const result = await resend.emails.send({
-    from: fromAddress,
+  const data = await sendResendEmail({
     to: toEmail,
     subject: "Reset your RejectMap password",
     html: `
@@ -144,10 +156,5 @@ export async function sendPasswordResetEmail(toEmail: string, token: string): Pr
     `,
   });
 
-  if (result.error) {
-    console.error(`[email] Resend error for ${toEmail}:`, result.error);
-    throw new Error(`Failed to send reset email: ${result.error.message}`);
-  }
-
-  console.log(`[email] Password reset sent to ${toEmail} (id: ${result.data?.id})`);
+  console.log(`[email] Password reset sent to ${toEmail} (id: ${data?.id})`);
 }
