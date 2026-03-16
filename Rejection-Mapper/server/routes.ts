@@ -275,15 +275,40 @@ export async function registerRoutes(
   app.post("/api/members", isAdmin, async (req, res, next) => {
     try {
       const orgId = getOrgId(req);
-      const { email, username } = z.object({
+      const parsed = z.object({
         email: z.string().email("Enter a valid email address"),
         username: z.string().min(2, "Username must be at least 2 characters").regex(/^\S+$/, "Username cannot contain spaces"),
       }).parse(req.body);
+      const email = parsed.email.trim().toLowerCase();
+      const username = parsed.username.trim().toLowerCase();
 
       const existingEmail = await storage.getUserByEmail(email);
-      if (existingEmail) return res.status(400).json({ message: "An account with that email already exists" });
+      if (existingEmail) {
+        if (existingEmail.organizationId !== orgId) {
+          return res.status(400).json({ message: "An account with that email already exists in another organisation" });
+        }
+
+        // Existing member in the same org: resend activation invite.
+        const token = await storage.createInviteToken(existingEmail.id);
+        const org = await storage.getOrganizationById(orgId);
+        try {
+          await sendWorkerInviteEmail(email, existingEmail.username ?? username, token, org?.name ?? "your organisation");
+        } catch (emailErr: any) {
+          console.error("[email] Failed to resend invite email:", emailErr?.message ?? emailErr);
+          return res.status(500).json({ message: emailErr?.message ?? "Failed to send invite email. Check email configuration." });
+        }
+
+        const { password: _, ...safeExisting } = existingEmail;
+        return res.status(200).json({ ...safeExisting, resent: true });
+      }
+
       const existingUsername = await storage.getUserByUsername(username);
-      if (existingUsername) return res.status(400).json({ message: "That username is already taken" });
+      if (existingUsername) {
+        if (existingUsername.organizationId === orgId) {
+          return res.status(400).json({ message: "That username is already taken in your organisation" });
+        }
+        return res.status(400).json({ message: "That username is already taken in another organisation" });
+      }
 
       const { randomBytes } = await import("crypto");
       const tempPassword = await hashPassword(randomBytes(32).toString("hex"));
@@ -664,8 +689,15 @@ export async function registerRoutes(
         partId: z.coerce.number(),
         reworkTypeId: z.coerce.number(),
         quantity: z.coerce.number().default(1),
+        entryDate: z.string().optional(),
       }).parse(req.body);
-      const created = await storage.createReworkEntry({ ...input, organizationId: orgId });
+      const { entryDate, ...rest } = input;
+      const entryDateObj = entryDate ? new Date(entryDate) : undefined;
+      const created = await storage.createReworkEntry({
+        ...rest,
+        organizationId: orgId,
+        ...(entryDateObj ? { date: entryDateObj } : {}),
+      });
       res.status(201).json(created);
     } catch (err) {
       if (err instanceof z.ZodError) {
