@@ -153,6 +153,8 @@ export async function initDb(): Promise<void> {
     ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "imported_at" timestamp;
     ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "zone_id" integer REFERENCES "zones"("id");
 
+      ALTER TABLE "rework_types" ADD COLUMN IF NOT EXISTS "zone" text;
+
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "rate" double precision;
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "amount" double precision;
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "process" text;
