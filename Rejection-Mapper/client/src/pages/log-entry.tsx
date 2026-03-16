@@ -9,6 +9,7 @@ import { useParts } from "@/hooks/use-parts";
 import { useRejectionTypes } from "@/hooks/use-rejection-types";
 import { useReworkTypes } from "@/hooks/use-rework-types";
 import { useCreateRejectionEntry } from "@/hooks/use-rejection-entries";
+import { useCreateReworkEntry } from "@/hooks/use-rework-entries";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -95,7 +96,8 @@ export default function LogEntry() {
   const { data: parts, isLoading: isLoadingParts } = useParts();
   const { data: rejectionTypes, isLoading: isLoadingTypes } = useRejectionTypes();
   const { data: reworkTypes } = useReworkTypes();
-  const createMutation = useCreateRejectionEntry();
+  const createRejectionMutation = useCreateRejectionEntry();
+  const createReworkMutation = useCreateReworkEntry();
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -131,7 +133,21 @@ export default function LogEntry() {
     try {
       for (const entry of entries) {
         await new Promise((resolve, reject) => {
-          createMutation.mutate(
+          if (entry.purpose === "rework") {
+            createReworkMutation.mutate(
+              {
+                partId: data.partId,
+                reworkTypeId: entry.rejectionTypeId,
+                quantity: entry.quantity,
+                remarks: data.remarks,
+                entryDate: data.entryDate || undefined,
+              },
+              { onSuccess: resolve, onError: reject }
+            );
+            return;
+          }
+
+          createRejectionMutation.mutate(
             {
               partId: data.partId,
               rejectionTypeId: entry.rejectionTypeId,
@@ -178,10 +194,15 @@ export default function LogEntry() {
       const part = parts?.find(
         p => p.partNumber.toLowerCase() === partNumber?.toLowerCase()
       );
-      const rejType = rejectionTypes?.find(
-        t => t.rejectionCode.toLowerCase() === codeOrReason.toLowerCase() ||
-             t.reason.toLowerCase() === codeOrReason.toLowerCase()
-      );
+      const rejType = purpose === "rework"
+        ? reworkTypes?.find(
+            t => t.reworkCode.toLowerCase() === codeOrReason.toLowerCase() ||
+                 t.reason.toLowerCase() === codeOrReason.toLowerCase()
+          )
+        : rejectionTypes?.find(
+            t => t.rejectionCode.toLowerCase() === codeOrReason.toLowerCase() ||
+                 t.reason.toLowerCase() === codeOrReason.toLowerCase()
+          );
 
       if (!part || !rejType) {
         failCount++;
@@ -190,7 +211,21 @@ export default function LogEntry() {
 
       try {
         await new Promise<void>((resolve, reject) => {
-          createMutation.mutate(
+          if (purpose === "rework") {
+            createReworkMutation.mutate(
+              {
+                partId: part.id,
+                reworkTypeId: rejType.id,
+                quantity,
+                remarks: remarks || undefined,
+                entryDate: entryDate || undefined,
+              },
+              { onSuccess: () => resolve(), onError: reject }
+            );
+            return;
+          }
+
+          createRejectionMutation.mutate(
             {
               partId: part.id,
               rejectionTypeId: rejType.id,
@@ -223,9 +258,6 @@ export default function LogEntry() {
       });
     }
   };
-
-  const rejectionOnlyTypes = rejectionTypes?.filter(t => t.type === "rejection") ?? [];
-  const reworkOnlyTypes = rejectionTypes?.filter(t => t.type === "rework") ?? [];
 
   return (
     <div className="max-w-2xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
