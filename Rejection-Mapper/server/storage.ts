@@ -27,8 +27,26 @@ import {
   type Organization,
   type Zone,
 } from "@shared/schema";
-import { eq, desc, gte, lte, and, gt, inArray } from "drizzle-orm";
+import { eq, desc, gte, lte, and, gt, inArray, ilike } from "drizzle-orm";
 import crypto from "crypto";
+
+function normalizeInviteToken(raw: string): string {
+  let token = String(raw ?? "");
+  try {
+    token = decodeURIComponent(token);
+  } catch {
+    // Keep original token if URI decoding fails.
+  }
+
+  token = token.trim();
+  token = token.replace(/^['"`]+|['"`]+$/g, "");
+  token = token.replace(/[)\].,;!?]+$/g, "");
+
+  const hex = token.match(/[a-fA-F0-9]{32,128}/);
+  if (hex?.[0]) token = hex[0];
+
+  return token.toLowerCase();
+}
 
 function generateInviteCode(): string {
   return crypto.randomBytes(4).toString("hex").toUpperCase();
@@ -680,7 +698,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUserByInviteToken(token: string): Promise<User | undefined> {
-    const cleanToken = token.trim();
+    const cleanToken = normalizeInviteToken(token);
+    if (!cleanToken) return undefined;
     const now = new Date();
     const [row] = await db
       .select({ user: users })
@@ -688,7 +707,7 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(users, eq(inviteTokens.userId, users.id))
       .where(
         and(
-          eq(inviteTokens.token, cleanToken),
+          ilike(inviteTokens.token, cleanToken),
           gt(inviteTokens.expiresAt, now),
           eq(inviteTokens.usedAt, null as any),
         )
@@ -701,7 +720,7 @@ export class DatabaseStorage implements IStorage {
         `
           SELECT id
           FROM users
-          WHERE invite_token = $1
+          WHERE LOWER(invite_token) = LOWER($1)
             AND (invite_expires_at IS NULL OR invite_expires_at > NOW())
             AND invite_used_at IS NULL
           LIMIT 1
@@ -721,11 +740,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async consumeInviteToken(token: string): Promise<void> {
-    const cleanToken = token.trim();
+    const cleanToken = normalizeInviteToken(token);
+    if (!cleanToken) return;
     await db
       .update(inviteTokens)
       .set({ usedAt: new Date() })
-      .where(eq(inviteTokens.token, cleanToken));
+      .where(ilike(inviteTokens.token, cleanToken));
 
     // Backward compatibility: consume legacy invite tokens when present.
     try {
@@ -733,7 +753,7 @@ export class DatabaseStorage implements IStorage {
         `
           UPDATE users
           SET invite_used_at = NOW()
-          WHERE invite_token = $1
+          WHERE LOWER(invite_token) = LOWER($1)
             AND invite_used_at IS NULL
         `,
         [cleanToken],
