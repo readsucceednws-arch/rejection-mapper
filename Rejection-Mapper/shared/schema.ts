@@ -75,7 +75,7 @@ export const reworkTypes = pgTable("rework_types", {
   id: serial("id").primaryKey(),
   reworkCode: text("rework_code").notNull(),
   reason: text("reason").notNull(),
-  type: text("type").notNull().default("Zone 1"),
+  zone: text("zone"),
   organizationId: integer("organization_id").references(() => organizations.id),
 });
 
