@@ -3,6 +3,7 @@ import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useReworkTypes, useCreateReworkType, useUpdateReworkType, useDeleteReworkType, useBulkDeleteReworkTypes } from "@/hooks/use-rework-types";
+import { useZones } from "@/hooks/use-zones";
 import { useUser } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import type { ReworkType } from "@shared/schema";
@@ -11,6 +12,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -33,6 +37,7 @@ const reworkTypeFormSchema = z.object({
 });
 
 type FormValues = z.infer<typeof reworkTypeFormSchema>;
+const NONE_VALUE = "__none__";
 
 function ReworkTypeForm({
   defaultValues,
@@ -40,12 +45,14 @@ function ReworkTypeForm({
   isPending,
   onCancel,
   submitLabel,
+  zones,
 }: {
   defaultValues: FormValues;
   onSubmit: (data: FormValues) => void;
   isPending: boolean;
   onCancel: () => void;
   submitLabel: string;
+  zones: { id: number; name: string }[];
 }) {
   const form = useForm<FormValues>({
     resolver: zodResolver(reworkTypeFormSchema),
@@ -65,12 +72,34 @@ function ReworkTypeForm({
           <FormItem>
             <FormLabel>Zone</FormLabel>
             <FormControl>
-              <Input
-                placeholder="e.g. Zone A, Line 2, Cell 3..."
-                {...field}
-                value={field.value || ""}
-                data-testid="input-rework-zone"
-              />
+              <Select
+                value={field.value || NONE_VALUE}
+                onValueChange={(val) => field.onChange(val === NONE_VALUE ? "" : val)}
+              >
+                <SelectTrigger data-testid="select-trigger-rework-zone">
+                  <SelectValue placeholder="Select zone..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE_VALUE}>- None -</SelectItem>
+                  {zones.length > 0
+                    ? zones.map((zone) => (
+                        <SelectItem key={zone.id} value={zone.name} data-testid={`option-zone-${zone.id}`}>
+                          {zone.name}
+                        </SelectItem>
+                      ))
+                    : (
+                      <>
+                        <SelectItem value="Zone 1">Zone 1</SelectItem>
+                        <SelectItem value="Zone 2">Zone 2</SelectItem>
+                        <SelectItem value="Zone 3">Zone 3</SelectItem>
+                        <SelectItem value="Zone 4">Zone 4</SelectItem>
+                        <SelectItem value="Zone 5">Zone 5</SelectItem>
+                        <SelectItem value="Zone 6">Zone 6</SelectItem>
+                        <SelectItem value="General">General</SelectItem>
+                      </>
+                    )}
+                </SelectContent>
+              </Select>
             </FormControl>
             <FormMessage />
           </FormItem>
@@ -88,6 +117,7 @@ function ReworkTypeForm({
 
 export default function ManageReworkTypes() {
   const { data: types, isLoading } = useReworkTypes();
+  const { data: zones } = useZones();
   const { data: currentUser } = useUser();
   const createMutation = useCreateReworkType();
   const updateMutation = useUpdateReworkType();
@@ -209,6 +239,7 @@ export default function ManageReworkTypes() {
                 isPending={createMutation.isPending}
                 onCancel={() => setIsAddOpen(false)}
                 submitLabel="Create"
+                zones={zones || []}
               />
             </DialogContent>
           </Dialog>
@@ -316,6 +347,7 @@ export default function ManageReworkTypes() {
               isPending={updateMutation.isPending}
               onCancel={() => setEditType(null)}
               submitLabel="Save Changes"
+              zones={zones || []}
             />
           )}
         </DialogContent>
