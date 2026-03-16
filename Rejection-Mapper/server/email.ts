@@ -2,6 +2,8 @@ import { Resend } from "resend";
 
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
+const DEFAULT_EMAIL_FROM = "noreply@aicreator.co.in";
+
 function getAppUrl(): string {
   if (process.env.APP_URL) return process.env.APP_URL;
   if (process.env.PUBLIC_APP_URL) return process.env.PUBLIC_APP_URL;
@@ -13,7 +15,16 @@ function getAppUrl(): string {
 }
 
 function getFromAddress(): string {
-  return process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev";
+  return process.env.EMAIL_FROM || process.env.RESEND_FROM_EMAIL || DEFAULT_EMAIL_FROM;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function assertResendConfigured(): void {
@@ -56,6 +67,13 @@ export async function sendWorkerInviteEmail(
   orgName: string
 ): Promise<void> {
   const activateUrl = `${getAppUrl()}/?invite_token=${token}`;
+  const safeUsername = escapeHtml(username);
+  const safeOrgName = escapeHtml(orgName);
+
+  if (!resend) {
+    console.log(`[DEV] Worker invite link for ${toEmail} (@${username}) in ${orgName}: ${activateUrl}`);
+    return;
+  }
 
   console.log(`[email] Sending worker invite to ${toEmail} (username: ${username})`);
 
@@ -66,10 +84,10 @@ export async function sendWorkerInviteEmail(
       <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px;">
         <h2 style="color: #111; margin-bottom: 8px;">You've been added to RejectMap</h2>
         <p style="color: #555; margin-bottom: 8px;">
-          You have been added to <strong>${orgName}</strong> on RejectMap with the username:
+          You have been added to <strong>${safeOrgName}</strong> on RejectMap with the username:
         </p>
         <div style="background:#f4f4f5; border-radius:8px; padding:12px 20px; margin-bottom:20px; text-align:center;">
-          <span style="font-family:monospace; font-size:20px; font-weight:700; color:#111;">@${username}</span>
+          <span style="font-family:monospace; font-size:20px; font-weight:700; color:#111;">@${safeUsername}</span>
         </div>
         <p style="color: #555; margin-bottom: 24px;">
           Click the button below to set your password and activate your account.
@@ -92,6 +110,8 @@ export async function sendWorkerInviteEmail(
 
 export async function sendInviteEmail(toEmail: string, inviteCode: string, orgName: string, inviterEmail: string): Promise<void> {
   const joinUrl = `${getAppUrl()}/?join=1`;
+  const safeOrgName = escapeHtml(orgName);
+  const safeInviterEmail = escapeHtml(inviterEmail);
 
   if (!resend) {
     console.log(`[DEV] Invite for ${toEmail} to join "${orgName}" with code: ${inviteCode}`);
@@ -105,7 +125,7 @@ export async function sendInviteEmail(toEmail: string, inviteCode: string, orgNa
       <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px;">
         <h2 style="color: #0d0c0c; margin-bottom: 8px;">You're invited to RejectMap</h2>
         <p style="color: #555; margin-bottom: 8px;">
-          <strong>${inviterEmail}</strong> has invited you to join <strong>${orgName}</strong> on RejectMap — a manufacturing parts rejection and rework tracker.
+          <strong>${safeInviterEmail}</strong> has invited you to join <strong>${safeOrgName}</strong> on RejectMap — a manufacturing parts rejection and rework tracker.
         </p>
         <p style="color: #555; margin-bottom: 24px;">Use the invite code below when you sign up:</p>
         <div style="background:#f4f4f5; border-radius:8px; padding:16px 24px; text-align:center; margin-bottom:24px;">
