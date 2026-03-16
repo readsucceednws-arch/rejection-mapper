@@ -138,6 +138,14 @@ export async function initDb(): Promise<void> {
       "used_at" timestamp
     );
 
+    CREATE TABLE IF NOT EXISTS "invite_tokens" (
+      "id" serial PRIMARY KEY,
+      "user_id" integer NOT NULL REFERENCES "users"("id"),
+      "token" text NOT NULL UNIQUE,
+      "expires_at" timestamp NOT NULL,
+      "used_at" timestamp
+    );
+
     CREATE TABLE IF NOT EXISTS "zones" (
       "id" serial PRIMARY KEY,
       "name" text NOT NULL,
