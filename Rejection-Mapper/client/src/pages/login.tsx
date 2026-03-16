@@ -7,6 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Form,
@@ -82,6 +83,11 @@ export default function LoginPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const joinParam = params.get("join");
+    if (joinParam === "1") {
+      setMode("join-org");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
     if (params.get("auth_error") === "google") {
       toast({ title: "Google sign-in failed", description: "Please try again or use email/password.", variant: "destructive" });
       window.history.replaceState({}, "", window.location.pathname);
