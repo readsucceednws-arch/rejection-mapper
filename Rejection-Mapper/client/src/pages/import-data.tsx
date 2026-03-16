@@ -22,6 +22,46 @@ import {
 
 type Row = Record<string, string>;
 
+function cleanHeader(header: string | undefined): string {
+  return (header ?? "").replace(/^\uFEFF/, "").trim();
+}
+
+function normalizeHeaderKey(header: string | undefined): string {
+  return cleanHeader(header).toLowerCase().replace(/\s+/g, " ");
+}
+
+function extractHeaderColumns(rawHeaders: any[]): { headers: string[]; indices: number[] } {
+  const headers: string[] = [];
+  const indices: number[] = [];
+  const seen = new Set<string>();
+
+  rawHeaders.forEach((cell, idx) => {
+    const h = cleanHeader(String(cell ?? ""));
+    if (!h || seen.has(h)) return;
+    seen.add(h);
+    headers.push(h);
+    indices.push(idx);
+  });
+
+  return { headers, indices };
+}
+
+function getRowCell(row: Row, col: string | null): string | null {
+  if (!col) return null;
+  const exact = row[col];
+  if (exact !== undefined && exact !== null) return String(exact).trim();
+
+  const target = normalizeHeaderKey(col);
+  for (const key of Object.keys(row)) {
+    if (normalizeHeaderKey(key) === target) {
+      const val = row[key];
+      return val !== undefined && val !== null ? String(val).trim() : null;
+    }
+  }
+
+  return null;
+}
+
 type ColumnMap = {
   partNumber:    string | null;
   rejectionCode: string | null;
@@ -500,7 +540,7 @@ function normalizeDate(raw: string | null): string | null {
 
 let _rowCounter = 0;
 function normalizeToModel(row: Row, cm: ColumnMap, sourceSheet: string): NormalizedRow {
-  const get = (col: string | null) => (col && row[col]) ? row[col].trim() : null;
+  const get = (col: string | null) => getRowCell(row, col);
   const getNum = (col: string | null) => {
     const v = get(col);
     if (!v) return null;
@@ -561,13 +601,16 @@ async function parseFileToSections(file: File): Promise<ParseResult> {
 
         const headerIdx = findHeaderRowIndex(rawRows);
         const rawHeaders = rawRows[headerIdx] as any[];
-        const headers = rawHeaders.map((h) => String(h ?? "").trim()).filter(Boolean);
+        const { headers, indices } = extractHeaderColumns(rawHeaders);
 
         const dataRaw = (rawRows.slice(headerIdx + 1) as any[][])
           .filter((r) => Array.isArray(r) && r.some((c) => c !== undefined && c !== null && String(c).trim() !== ""));
         const rows = dataRaw.map((r) => {
           const obj: Row = {};
-          headers.forEach((h, i) => { obj[h] = r[i] !== undefined && r[i] !== null ? String(r[i]).trim() : ""; });
+          headers.forEach((h, i) => {
+            const sourceIdx = indices[i];
+            obj[h] = r[sourceIdx] !== undefined && r[sourceIdx] !== null ? String(r[sourceIdx]).trim() : "";
+          });
           return obj;
         });
 
@@ -598,15 +641,18 @@ async function parseFileToSections(file: File): Promise<ParseResult> {
     const lines = text.trim().split(/\r?\n/);
     if (lines.length < 2) return { sections, skipped };
 
-    const candidates = lines.slice(0, 15).map((l) => l.split(",").map((h) => h.replace(/^"|"$/g, "").trim()));
+    const candidates = lines.slice(0, 15).map((l) => l.split(",").map((h) => cleanHeader(h.replace(/^"|"$/g, "").trim())));
     const headerIdx = candidates.reduce((best, row, i) =>
       scoreHeaderRow(row) > scoreHeaderRow(candidates[best]) ? i : best, 0);
 
-    const headers = candidates[headerIdx];
+    const { headers, indices } = extractHeaderColumns(candidates[headerIdx]);
     const rows: Row[] = lines.slice(headerIdx + 1).map((line) => {
       const values = line.match(/(".*?"|[^,]+|(?<=,)(?=,)|(?<=,)$|^(?=,))/g) ?? line.split(",");
       const obj: Row = {};
-      headers.forEach((h, i) => { obj[h] = (values[i] ?? "").replace(/^"|"$/g, "").trim(); });
+      headers.forEach((h, i) => {
+        const sourceIdx = indices[i];
+        obj[h] = (values[sourceIdx] ?? "").replace(/^"|"$/g, "").trim();
+      });
       return obj;
     }).filter((r) => Object.values(r).some((v) => v !== ""));
 
@@ -1181,11 +1227,11 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
           findBestNumericColumn(section.allHeaders, section.rows, [partNameCol, cm.quantity, cm.date]);
 
         for (const row of section.rows) {
-          const rawName = (partNameCol ? row[partNameCol]?.trim() : "") || "";
-          const rawDesc = (cm.description && cm.description !== partNameCol) ? (row[cm.description]?.trim() ?? "") : "";
+          const rawName = getRowCell(row, partNameCol) || "";
+          const rawDesc = (cm.description && cm.description !== partNameCol) ? (getRowCell(row, cm.description) ?? "") : "";
           const partNumber = rawName || rawDesc;
           if (!partNumber || isSummaryRow(partNumber) || !isPartNameLike(partNumber)) { result.skipped++; continue; }
-          const rawPrice = priceCol ? (row[priceCol]?.trim() ?? "") : "";
+          const rawPrice = priceCol ? (getRowCell(row, priceCol) ?? "") : "";
           const price = parseFloat(rawPrice.replace(/,/g, "")) || 0;
           const description = rawDesc || rawName;
           if (localParts.some((p) => p.partNumber.toLowerCase() === partNumber.toLowerCase())) { result.skipped++; continue; }
