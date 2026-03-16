@@ -408,7 +408,6 @@ export default function Dashboard() {
       totalCost: Number(row.totalCost) || 0,
     }));
   }, [effectiveCostData]);
-
   const filteredCostTableData = useMemo(() => {
     if (!normalizedCostData.length) return [];
     if (selectedCostPart === "all") return normalizedCostData;
