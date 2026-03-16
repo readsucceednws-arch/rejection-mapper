@@ -331,6 +331,39 @@ export default function Dashboard() {
     return Array.from(map.values()).sort((a, b) => b.totalCost - a.totalCost);
   }, [analyticsRejectionEntries, analyticsReworkEntries]);
 
+  const mergedCostData = useMemo(() => {
+    const map = new Map<string, { partNumber: string; description: string | null; price: number; rejectionQty: number; reworkQty: number; rejectionCost: number; reworkCost: number; totalCost: number }>();
+
+    const mergeRows = (rows: typeof fallbackCostData) => {
+      for (const row of rows) {
+        const existing = map.get(row.partNumber) || {
+          partNumber: row.partNumber,
+          description: row.description,
+          price: 0,
+          rejectionQty: 0,
+          reworkQty: 0,
+          rejectionCost: 0,
+          reworkCost: 0,
+          totalCost: 0,
+        };
+
+        existing.description = existing.description || row.description;
+        existing.price = existing.price || Number(row.price) || 0;
+        existing.rejectionQty = Math.max(existing.rejectionQty, Number(row.rejectionQty) || 0);
+        existing.reworkQty = Math.max(existing.reworkQty, Number(row.reworkQty) || 0);
+        existing.rejectionCost = Math.max(existing.rejectionCost, Number(row.rejectionCost) || 0);
+        existing.reworkCost = Math.max(existing.reworkCost, Number(row.reworkCost) || 0);
+        existing.totalCost = existing.rejectionCost + existing.reworkCost;
+        map.set(row.partNumber, existing);
+      }
+    };
+
+    if (costData?.length) mergeRows(costData);
+    if (fallbackCostData.length) mergeRows(fallbackCostData);
+
+    return Array.from(map.values()).sort((a, b) => b.totalCost - a.totalCost);
+  }, [costData, fallbackCostData]);
+
   const fallbackZoneData = useMemo(() => {
     const map = new Map<string, { zone: string; totalQuantity: number; rejections: number; reworks: number }>();
     const addZone = (zoneName: string, quantity: number, isRework: boolean) => {
@@ -353,7 +386,7 @@ export default function Dashboard() {
 
   const effectivePartData = partData && partData.length > 0 ? partData : fallbackPartData;
   const effectiveMonthData = monthData && monthData.length > 0 ? monthData : fallbackMonthData;
-  const effectiveCostData = costData && costData.length > 0 ? costData : fallbackCostData;
+  const effectiveCostData = mergedCostData;
   const effectiveZoneData = zoneData && zoneData.length > 0 ? zoneData : fallbackZoneData;
 
   const isLoadingDashboardEntries = isLoadingAnalyticsRejections || isLoadingAnalyticsReworks;
