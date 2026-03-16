@@ -110,6 +110,9 @@ export default function LogEntry() {
 
   const selectedPartId = form.watch("partId");
   const totalQuantity = entries.reduce((sum, e) => sum + e.quantity, 0);
+  const isSaving = createRejectionMutation.isPending || createReworkMutation.isPending;
+  const rejectionOnlyTypes = rejectionTypes?.filter((t) => t.type === "rejection") ?? [];
+  const reworkOnlyTypes = rejectionTypes?.filter((t) => t.type === "rework") ?? [];
 
   const addEntry = () => {
     if (newEntry.rejectionTypeId === 0) {
@@ -486,11 +489,11 @@ export default function LogEntry() {
               <div className="flex justify-end pt-4 border-t border-border/50">
                 <Button
                   type="submit"
-                  disabled={createMutation.isPending || entries.length === 0}
+                  disabled={isSaving || entries.length === 0}
                   className="px-8 shadow-lg shadow-primary/20 hover:shadow-xl hover:shadow-primary/30 transition-all duration-300"
                   data-testid="button-save-entries"
                 >
-                  {createMutation.isPending ? (
+                  {isSaving ? (
                     "Saving..."
                   ) : (
                     <>
