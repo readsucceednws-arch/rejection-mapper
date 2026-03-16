@@ -27,9 +27,10 @@ function AuthenticatedApp() {
     if (params.get("new_invite") && user) {
       window.history.replaceState({}, "", window.location.pathname);
     }
-    if (params.get("signin") && user) {
+    if ((params.get("signin") || params.get("join")) && user) {
       fetch("/api/logout", { method: "POST", credentials: "include" }).then(() => {
-        window.location.replace("/");
+        const nextQuery = params.get("join") ? "?join=1" : "";
+        window.location.replace(`/${nextQuery}`);
       });
     }
   }, [user]);
@@ -43,7 +44,7 @@ function AuthenticatedApp() {
   }
 
   const params = new URLSearchParams(window.location.search);
-  if (!user || params.get("signin")) {
+  if (!user || params.get("signin") || params.get("join")) {
     return <LoginPage />;
   }
 
