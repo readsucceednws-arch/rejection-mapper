@@ -446,36 +446,81 @@ export class DatabaseStorage implements IStorage {
   async getCostSummary(organizationId: number, filters?: { startDate?: string; endDate?: string }): Promise<{ partNumber: string; description: string | null; price: number; rejectionQty: number; reworkQty: number; rejectionCost: number; reworkCost: number; totalCost: number }[]> {
     const map = new Map<number, { partNumber: string; description: string | null; price: number; rejectionQty: number; reworkQty: number; rejectionCost: number; reworkCost: number; totalCost: number; partId: number }>();
 
-    const entries = await this.getRejectionEntries(organizationId, filters);
-    for (const entry of entries) {
-      const partPrice = Number(entry.part.price) || 0;
-      const entryRate = Number(entry.rate) || 0;
-      const entryAmount = Number(entry.amount) || 0;
-      const cost = entryAmount > 0 ? entryAmount : (entryRate > 0 ? entry.quantity * entryRate : entry.quantity * partPrice);
+    const upsertCostRow = (
+      partId: number,
+      partNumber: string,
+      description: string | null,
+      partPriceRaw: unknown,
+      entryRateRaw: unknown,
+      entryAmountRaw: unknown,
+      quantity: number,
+      kind: "rejection" | "rework"
+    ) => {
+      const partPrice = Number(partPriceRaw) || 0;
+      const entryRate = Number(entryRateRaw) || 0;
+      const entryAmount = Number(entryAmountRaw) || 0;
+      const cost = entryAmount > 0 ? entryAmount : (entryRate > 0 ? quantity * entryRate : quantity * partPrice);
       const unitPrice = entryRate > 0 ? entryRate : partPrice;
-      const existing = map.get(entry.partId) || { partId: entry.partId, partNumber: entry.part.partNumber, description: entry.part.description, price: unitPrice, rejectionQty: 0, reworkQty: 0, rejectionCost: 0, reworkCost: 0, totalCost: 0 };
-      if (entry.rejectionType.type === "rework") { existing.reworkQty += entry.quantity; existing.reworkCost += cost; }
-      else { existing.rejectionQty += entry.quantity; existing.rejectionCost += cost; }
+      const existing = map.get(partId) || {
+        partId,
+        partNumber,
+        description,
+        price: unitPrice,
+        rejectionQty: 0,
+        reworkQty: 0,
+        rejectionCost: 0,
+        reworkCost: 0,
+        totalCost: 0,
+      };
+
+      existing.price = existing.price > 0 ? existing.price : unitPrice;
+
+      if (kind === "rejection") {
+        existing.rejectionQty += quantity;
+        existing.rejectionCost += cost;
+      } else {
+        existing.reworkQty += quantity;
+        existing.reworkCost += cost;
+      }
+
       existing.totalCost = existing.rejectionCost + existing.reworkCost;
-      map.set(entry.partId, existing);
+      map.set(partId, existing);
+    };
+
+    try {
+      const rejectionSideEntries = await this.getRejectionEntries(organizationId, filters);
+      for (const entry of rejectionSideEntries) {
+        upsertCostRow(
+          entry.partId,
+          entry.part.partNumber,
+          entry.part.description,
+          entry.part.price,
+          entry.rate,
+          entry.amount,
+          entry.quantity,
+          "rejection"
+        );
+      }
+    } catch {
+      // Keep cost analytics available even if rejection queries fail.
     }
 
     try {
-      const rEntries = await this.getReworkEntries(organizationId, filters);
-      for (const entry of rEntries) {
-        const partPrice = Number(entry.part.price) || 0;
-        const entryRate = Number(entry.rate) || 0;
-        const entryAmount = Number(entry.amount) || 0;
-        const cost = entryAmount > 0 ? entryAmount : (entryRate > 0 ? entry.quantity * entryRate : entry.quantity * partPrice);
-        const unitPrice = entryRate > 0 ? entryRate : partPrice;
-        const existing = map.get(entry.partId) || { partId: entry.partId, partNumber: entry.part.partNumber, description: entry.part.description, price: unitPrice, rejectionQty: 0, reworkQty: 0, rejectionCost: 0, reworkCost: 0, totalCost: 0 };
-        existing.reworkQty += entry.quantity;
-        existing.reworkCost += cost;
-        existing.totalCost = existing.rejectionCost + existing.reworkCost;
-        map.set(entry.partId, existing);
+      const reworkSideEntries = await this.getReworkEntries(organizationId, filters);
+      for (const entry of reworkSideEntries) {
+        upsertCostRow(
+          entry.partId,
+          entry.part.partNumber,
+          entry.part.description,
+          entry.part.price,
+          entry.rate,
+          entry.amount,
+          entry.quantity,
+          "rework"
+        );
       }
     } catch {
-      // Keep rejection-side cost analytics available even if rework queries fail.
+      // Keep cost analytics available even if rework queries fail.
     }
 
     return Array.from(map.values()).map(({ partId, ...rest }) => rest).sort((a, b) => b.totalCost - a.totalCost);
@@ -573,6 +618,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteUser(userId: number, organizationId: number): Promise<void> {
+    await db.delete(inviteTokens).where(eq(inviteTokens.userId, userId));
+    await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, userId));
     await db.delete(users).where(and(eq(users.id, userId), eq(users.organizationId, organizationId)));
   }
 
