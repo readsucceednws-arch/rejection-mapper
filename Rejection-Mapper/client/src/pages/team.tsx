@@ -57,12 +57,17 @@ export default function TeamPage() {
   });
 
   const addMutation = useMutation({
-    mutationFn: async () => apiRequest("POST", "/api/members", { email, username }),
-    onSuccess: () => {
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/members", { email, username });
+      return (await res.json()) as { resent?: boolean };
+    },
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["/api/members"] });
       toast({
-        title: "Invite sent",
-        description: `An activation email has been sent to ${email}. They'll set their own password.`,
+        title: data?.resent ? "Invite re-sent" : "Invite sent",
+        description: data?.resent
+          ? `A fresh activation email has been re-sent to ${email}.`
+          : `An activation email has been sent to ${email}. They'll set their own password.`,
       });
       setEmail("");
       setUsername("");
