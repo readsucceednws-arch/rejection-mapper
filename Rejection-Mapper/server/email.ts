@@ -3,6 +3,10 @@ import { Resend } from "resend";
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 function getAppUrl(): string {
+  if (process.env.APP_URL) return process.env.APP_URL;
+  if (process.env.PUBLIC_APP_URL) return process.env.PUBLIC_APP_URL;
+  if (process.env.RENDER_EXTERNAL_URL) return process.env.RENDER_EXTERNAL_URL;
+
   const domain = process.env.REPLIT_DOMAINS?.split(",")[0];
   if (domain) return `https://${domain}`;
   return "http://localhost:5000";
@@ -84,7 +88,7 @@ export async function sendInviteEmail(toEmail: string, inviteCode: string, orgNa
     subject: `You've been invited to join ${orgName} on RejectMap`,
     html: `
       <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px;">
-        <h2 style="color: #111; margin-bottom: 8px;">You're invited to RejectMap</h2>
+        <h2 style="color: #0d0c0c; margin-bottom: 8px;">You're invited to RejectMap</h2>
         <p style="color: #555; margin-bottom: 8px;">
           <strong>${inviterEmail}</strong> has invited you to join <strong>${orgName}</strong> on RejectMap — a manufacturing parts rejection and rework tracker.
         </p>
