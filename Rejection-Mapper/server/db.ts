@@ -180,6 +180,58 @@ export async function initDb(): Promise<void> {
       END IF;
     END $$;
 
+    DO $$
+    DECLARE
+      current_delete_rule text;
+    BEGIN
+      SELECT rc.delete_rule INTO current_delete_rule
+      FROM information_schema.referential_constraints rc
+      JOIN information_schema.table_constraints tc
+        ON rc.constraint_name = tc.constraint_name
+       AND rc.constraint_schema = tc.constraint_schema
+      WHERE tc.table_name = 'invite_tokens'
+        AND tc.constraint_type = 'FOREIGN KEY'
+        AND tc.constraint_name = 'invite_tokens_user_id_fkey';
+
+      IF current_delete_rule IS DISTINCT FROM 'CASCADE' THEN
+        BEGIN
+          ALTER TABLE "invite_tokens" DROP CONSTRAINT IF EXISTS "invite_tokens_user_id_fkey";
+        EXCEPTION WHEN undefined_table THEN
+          NULL;
+        END;
+
+        ALTER TABLE "invite_tokens"
+          ADD CONSTRAINT "invite_tokens_user_id_fkey"
+          FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;
+      END IF;
+    END $$;
+
+    DO $$
+    DECLARE
+      current_delete_rule text;
+    BEGIN
+      SELECT rc.delete_rule INTO current_delete_rule
+      FROM information_schema.referential_constraints rc
+      JOIN information_schema.table_constraints tc
+        ON rc.constraint_name = tc.constraint_name
+       AND rc.constraint_schema = tc.constraint_schema
+      WHERE tc.table_name = 'password_reset_tokens'
+        AND tc.constraint_type = 'FOREIGN KEY'
+        AND tc.constraint_name = 'password_reset_tokens_user_id_fkey';
+
+      IF current_delete_rule IS DISTINCT FROM 'CASCADE' THEN
+        BEGIN
+          ALTER TABLE "password_reset_tokens" DROP CONSTRAINT IF EXISTS "password_reset_tokens_user_id_fkey";
+        EXCEPTION WHEN undefined_table THEN
+          NULL;
+        END;
+
+        ALTER TABLE "password_reset_tokens"
+          ADD CONSTRAINT "password_reset_tokens_user_id_fkey"
+          FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;
+      END IF;
+    END $$;
+
     UPDATE "users" SET "role" = 'admin'
     WHERE "id" IN (
       SELECT MIN("id") FROM "users" WHERE "organization_id" IS NOT NULL GROUP BY "organization_id"
