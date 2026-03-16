@@ -1,4 +1,4 @@
-import { db } from "./db";
+import { db, pool } from "./db";
 import {
   parts,
   rejectionTypes,
@@ -658,6 +658,24 @@ export class DatabaseStorage implements IStorage {
     // Give workers more time to activate accounts (7 days).
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     await db.insert(inviteTokens).values({ userId, token, expiresAt });
+
+    // Backward compatibility: if legacy invite columns still exist on users,
+    // write the token there too so older read paths continue to work.
+    try {
+      await pool.query(
+        `
+          UPDATE users
+          SET invite_token = $1,
+              invite_expires_at = $2,
+              invite_used_at = NULL
+          WHERE id = $3
+        `,
+        [token, expiresAt, userId],
+      );
+    } catch {
+      // Legacy columns are not present in newer schemas.
+    }
+
     return token;
   }
 
@@ -675,7 +693,31 @@ export class DatabaseStorage implements IStorage {
           eq(inviteTokens.usedAt, null as any),
         )
       );
-    return row?.user;
+    if (row?.user) return row.user;
+
+    // Backward compatibility: support old invite token columns on users table.
+    try {
+      const legacyMatch = await pool.query(
+        `
+          SELECT id
+          FROM users
+          WHERE invite_token = $1
+            AND (invite_expires_at IS NULL OR invite_expires_at > NOW())
+            AND invite_used_at IS NULL
+          LIMIT 1
+        `,
+        [cleanToken],
+      );
+
+      const legacyUserId = legacyMatch.rows?.[0]?.id;
+      if (legacyUserId) {
+        return this.getUserById(Number(legacyUserId));
+      }
+    } catch {
+      // Legacy columns are not present in newer schemas.
+    }
+
+    return undefined;
   }
 
   async consumeInviteToken(token: string): Promise<void> {
@@ -684,6 +726,21 @@ export class DatabaseStorage implements IStorage {
       .update(inviteTokens)
       .set({ usedAt: new Date() })
       .where(eq(inviteTokens.token, cleanToken));
+
+    // Backward compatibility: consume legacy invite tokens when present.
+    try {
+      await pool.query(
+        `
+          UPDATE users
+          SET invite_used_at = NOW()
+          WHERE invite_token = $1
+            AND invite_used_at IS NULL
+        `,
+        [cleanToken],
+      );
+    } catch {
+      // Legacy columns are not present in newer schemas.
+    }
   }
 
   async getZones(organizationId: number): Promise<Zone[]> {
