@@ -655,12 +655,14 @@ export class DatabaseStorage implements IStorage {
 
   async createInviteToken(userId: number): Promise<string> {
     const token = crypto.randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    // Give workers more time to activate accounts (7 days).
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     await db.insert(inviteTokens).values({ userId, token, expiresAt });
     return token;
   }
 
   async getUserByInviteToken(token: string): Promise<User | undefined> {
+    const cleanToken = token.trim();
     const now = new Date();
     const [row] = await db
       .select({ user: users })
@@ -668,7 +670,7 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(users, eq(inviteTokens.userId, users.id))
       .where(
         and(
-          eq(inviteTokens.token, token),
+          eq(inviteTokens.token, cleanToken),
           gt(inviteTokens.expiresAt, now),
           eq(inviteTokens.usedAt, null as any),
         )
@@ -677,10 +679,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async consumeInviteToken(token: string): Promise<void> {
+    const cleanToken = token.trim();
     await db
       .update(inviteTokens)
       .set({ usedAt: new Date() })
-      .where(eq(inviteTokens.token, token));
+      .where(eq(inviteTokens.token, cleanToken));
   }
 
   async getZones(organizationId: number): Promise<Zone[]> {
