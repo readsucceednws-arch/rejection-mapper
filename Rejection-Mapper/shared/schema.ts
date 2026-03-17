@@ -69,7 +69,6 @@ export const rejectionEntries = pgTable("rejection_entries", {
   rejectionReason: text("rejection_reason"),
   importedAt: timestamp("imported_at"),
   zoneId: integer("zone_id").references(() => zones.id),
-  createdByUsername: text("created_by_username"),
 });
 
 export const reworkTypes = pgTable("rework_types", {
@@ -95,7 +94,6 @@ export const reworkEntries = pgTable("rework_entries", {
   process: text("process"),
   importedAt: timestamp("imported_at"),
   zoneId: integer("zone_id").references(() => zones.id),
-  createdByUsername: text("created_by_username"),
 });
 
 export const passwordResetTokens = pgTable("password_reset_tokens", {
@@ -242,7 +240,6 @@ export const insertRejectionEntrySchema = createInsertSchema(
   id: true,
   date: true,
   importedAt: true,
-  createdByUsername: true,
 });
 
 export const insertReworkTypeSchema = createInsertSchema(reworkTypes).omit({
@@ -255,7 +252,6 @@ export const insertReworkEntrySchema = createInsertSchema(
   id: true,
   date: true,
   importedAt: true,
-  createdByUsername: true,
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({
