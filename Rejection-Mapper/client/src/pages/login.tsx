@@ -57,6 +57,21 @@ const resetPasswordSchema = z.object({
   path: ["confirmPassword"],
 });
 
+function normalizeUrlToken(raw: string): string {
+  let token = String(raw ?? "");
+  try {
+    token = decodeURIComponent(token);
+  } catch {
+    // Keep original token when decoding fails.
+  }
+
+  token = token.trim();
+  token = token.replace(/^['"`]+|['"`]+$/g, "");
+  token = token.replace(/[)\].,;!?]+$/g, "");
+
+  return token;
+}
+
 export default function LoginPage() {
   const [mode, setMode] = useState<Mode>("login");
   const [showPassword, setShowPassword] = useState(false);
@@ -94,13 +109,13 @@ export default function LoginPage() {
     }
     const resetTok = params.get("reset_token");
     if (resetTok) {
-      setResetToken(resetTok);
+      setResetToken(normalizeUrlToken(resetTok));
       setMode("reset-password");
       window.history.replaceState({}, "", window.location.pathname);
     }
     const inviteTok = params.get("invite_token");
     if (inviteTok) {
-      const cleanedInviteToken = inviteTok.trim();
+      const cleanedInviteToken = normalizeUrlToken(inviteTok);
       setInviteToken(cleanedInviteToken);
       setMode("accept-invite");
       window.history.replaceState({}, "", window.location.pathname);
