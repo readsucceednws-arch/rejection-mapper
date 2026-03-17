@@ -540,14 +540,6 @@ export async function registerRoutes(
       const { entryDate, ...rest } = input;
       const entryDateObj = entryDate ? new Date(entryDate) : undefined;
 
-      // Cross-session duplicate check for imports (only when entryDate is provided)
-      if (entryDateObj) {
-        const isDuplicate = await storage.findDuplicateRejectionEntry(
-          orgId, entryDateObj, rest.partId, rest.rejectionTypeId, rest.quantity
-        );
-        if (isDuplicate) return res.status(200).json({ _duplicate: true });
-      }
-
       const entryPayload: Parameters<typeof storage.createRejectionEntry>[0] = {
         ...rest,
         organizationId: orgId,
