@@ -280,7 +280,22 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createRejectionEntry(entry: InsertRejectionEntry & { date?: Date; createdByUsername?: string | null }): Promise<RejectionEntryResponse> {
-    const [created] = await db.insert(rejectionEntries).values(entry).returning();
+    let created;
+
+    try {
+      [created] = await db.insert(rejectionEntries).values(entry).returning();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const missingCreatedByColumn =
+        message.includes("created_by_username") &&
+        (message.includes("does not exist") || message.includes("column"));
+
+      if (!missingCreatedByColumn) throw error;
+
+      const { createdByUsername: _createdByUsername, ...legacyEntry } = entry;
+      [created] = await db.insert(rejectionEntries).values(legacyEntry).returning();
+    }
+
     const populated = await db.query.rejectionEntries.findFirst({
       where: eq(rejectionEntries.id, created.id),
       with: { part: true, rejectionType: true, zone: true },
@@ -353,7 +368,22 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createReworkEntry(entry: InsertReworkEntry & { createdByUsername?: string | null; date?: Date }): Promise<ReworkEntryResponse> {
-    const [created] = await db.insert(reworkEntries).values(entry).returning();
+    let created;
+
+    try {
+      [created] = await db.insert(reworkEntries).values(entry).returning();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const missingCreatedByColumn =
+        message.includes("created_by_username") &&
+        (message.includes("does not exist") || message.includes("column"));
+
+      if (!missingCreatedByColumn) throw error;
+
+      const { createdByUsername: _createdByUsername, ...legacyEntry } = entry;
+      [created] = await db.insert(reworkEntries).values(legacyEntry).returning();
+    }
+
     const populated = await db.query.reworkEntries.findFirst({
       where: eq(reworkEntries.id, created.id),
       with: { part: true, reworkType: true, zone: true },
