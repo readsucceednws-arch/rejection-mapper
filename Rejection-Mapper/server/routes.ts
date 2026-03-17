@@ -535,7 +535,6 @@ export async function registerRoutes(
   app.post(api.rejectionEntries.create.path, isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const user = req.user as User;
       const input = api.rejectionEntries.create.input.parse(req.body);
       const { entryDate, ...rest } = input;
       const entryDateObj = entryDate ? new Date(entryDate) : undefined;
@@ -543,7 +542,6 @@ export async function registerRoutes(
       const entryPayload: Parameters<typeof storage.createRejectionEntry>[0] = {
         ...rest,
         organizationId: orgId,
-        createdByUsername: user.username || user.email || `user-${user.id}`,
         ...(entryDateObj ? { date: entryDateObj } : {}),
       };
       const created = await storage.createRejectionEntry(entryPayload);
@@ -679,7 +677,6 @@ export async function registerRoutes(
   app.post("/api/rework-entries", isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const user = req.user as User;
       const { insertReworkEntrySchema } = await import("@shared/schema");
       const input = insertReworkEntrySchema.extend({
         partId: z.coerce.number(),
@@ -692,7 +689,6 @@ export async function registerRoutes(
       const created = await storage.createReworkEntry({
         ...rest,
         organizationId: orgId,
-        createdByUsername: user.username || user.email || `user-${user.id}`,
         ...(entryDateObj ? { date: entryDateObj } : {}),
       });
       res.status(201).json(created);
