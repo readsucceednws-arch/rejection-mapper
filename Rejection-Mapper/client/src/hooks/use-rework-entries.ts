@@ -74,7 +74,7 @@ export function useBulkDeleteReworkEntries() {
 export function useCreateReworkEntry() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (data: Omit<InsertReworkEntry, "date">) => {
+    mutationFn: async (data: Omit<InsertReworkEntry, "date"> & { entryDate?: string }) => {
       const res = await fetch("/api/rework-entries", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -82,8 +82,19 @@ export function useCreateReworkEntry() {
         credentials: "include",
       });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || "Failed to create rework entry");
+        const text = await res.text();
+        let message = "Failed to create rework entry";
+
+        if (text) {
+          try {
+            const err = JSON.parse(text) as { message?: string };
+            message = err.message || message;
+          } catch {
+            message = text;
+          }
+        }
+
+        throw new Error(message);
       }
       return res.json() as Promise<ReworkEntryResponse>;
     },
