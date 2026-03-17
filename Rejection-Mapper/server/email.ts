@@ -66,7 +66,7 @@ export async function sendWorkerInviteEmail(
   token: string,
   orgName: string
 ): Promise<void> {
-  const activateUrl = `${getAppUrl()}/?invite_token=${token}`;
+  const activateUrl = `${getAppUrl()}/?invite_token=${encodeURIComponent(token)}`;
   const safeUsername = escapeHtml(username);
   const safeOrgName = escapeHtml(orgName);
 
@@ -145,7 +145,8 @@ export async function sendInviteEmail(toEmail: string, inviteCode: string, orgNa
 }
 
 export async function sendPasswordResetEmail(toEmail: string, token: string): Promise<void> {
-  const resetUrl = `${getAppUrl()}/?reset_token=${token}`;
+  const resetUrl = `${getAppUrl()}/?reset_token=${encodeURIComponent(token)}`;
+  const safeEmail = escapeHtml(toEmail);
 
   if (!resend) {
     console.log(`[DEV] Password reset link for ${toEmail}: ${resetUrl}`);
@@ -161,7 +162,7 @@ export async function sendPasswordResetEmail(toEmail: string, token: string): Pr
       <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px;">
         <h2 style="color: #111; margin-bottom: 8px;">Reset your password</h2>
         <p style="color: #555; margin-bottom: 24px;">
-          We received a request to reset the password for your RejectMap account (<strong>${toEmail}</strong>).
+          We received a request to reset the password for your RejectMap account (<strong>${safeEmail}</strong>).
           Click the button below to choose a new password. This link expires in <strong>1 hour</strong>.
         </p>
         <a href="${resetUrl}" style="display:inline-block; background:#2563eb; color:#fff; text-decoration:none; padding:12px 24px; border-radius:6px; font-weight:600;">
