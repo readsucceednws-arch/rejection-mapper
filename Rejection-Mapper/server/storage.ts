@@ -27,7 +27,7 @@ import {
   type Organization,
   type Zone,
 } from "@shared/schema";
-import { eq, desc, gte, lte, and, gt, inArray, ilike } from "drizzle-orm";
+import { eq, desc, gte, lte, and, gt, inArray, ilike, isNull } from "drizzle-orm";
 import crypto from "crypto";
 
 function normalizeInviteToken(raw: string): string {
@@ -658,7 +658,7 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(passwordResetTokens.token, token),
           gt(passwordResetTokens.expiresAt, now),
-          eq(passwordResetTokens.usedAt, null as any),
+          isNull(passwordResetTokens.usedAt),
         )
       );
     return row?.user;
@@ -709,7 +709,7 @@ export class DatabaseStorage implements IStorage {
         and(
           ilike(inviteTokens.token, cleanToken),
           gt(inviteTokens.expiresAt, now),
-          eq(inviteTokens.usedAt, null as any),
+          isNull(inviteTokens.usedAt),
         )
       );
     if (row?.user) return row.user;
