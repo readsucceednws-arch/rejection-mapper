@@ -97,11 +97,19 @@ export function useCreateRejectionEntry() {
       });
       
       if (!res.ok) {
-        if (res.status === 400) {
-          const err = await res.json();
-          throw new Error(err.message || "Validation error");
+        const text = await res.text();
+        let message = "Failed to log rejection entry";
+
+        if (text) {
+          try {
+            const err = JSON.parse(text) as { message?: string };
+            message = err.message || message;
+          } catch {
+            message = text;
+          }
         }
-        throw new Error("Failed to log rejection entry");
+
+        throw new Error(message);
       }
       return api.rejectionEntries.create.responses[201].parse(await res.json()) as RejectionEntryResponse;
     },
