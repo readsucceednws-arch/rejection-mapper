@@ -112,7 +112,7 @@ function resolveZone(val?: string | null): string {
 }
 
 function exportToCSV(entries: UnifiedEntry[], filename: string) {
-  const headers = ["Date", "Part Number", "Code", "Reason", "Purpose", "Zone", "Quantity", "Remarks"];
+  const headers = ["Date", "Part Number", "Code", "Reason", "Purpose", "Zone", "Logged By", "Quantity", "Remarks"];
   const rows = entries.map((entry) => {
     if (entry.source === "rejection") {
       const e = entry.data;
@@ -123,6 +123,7 @@ function exportToCSV(entries: UnifiedEntry[], filename: string) {
         e.rejectionType.reason,
         e.rejectionType.type,
         resolveZone(e.rejectionType.type),
+        e.createdByUsername || "Unknown",
         e.quantity,
         e.remarks || "",
       ];
@@ -135,6 +136,7 @@ function exportToCSV(entries: UnifiedEntry[], filename: string) {
         e.reworkType.reason,
         "rework",
         resolveZone(e.reworkType.zone),
+        e.createdByUsername || "Unknown",
         e.quantity,
         e.remarks || "",
       ];
@@ -203,7 +205,7 @@ function EntriesTable({
   onEdit?: (entry: UnifiedEntry) => void;
 }) {
   const allSelected = entries.length > 0 && entries.every((e) => selectedKeys.has(getEntryKey(e)));
-  const colSpan = isAdmin ? 11 : 9;
+  const colSpan = isAdmin ? 12 : 10;
 
   return (
     <Card className="border-border/50 shadow-sm overflow-hidden">
@@ -228,6 +230,7 @@ function EntriesTable({
               <TableHead>Reason</TableHead>
               <TableHead>Purpose</TableHead>
               <TableHead>Zone</TableHead>
+              <TableHead>Logged By</TableHead>
               <TableHead className="text-right">Quantity</TableHead>
               <TableHead className="max-w-[260px]">Remarks</TableHead>
               {isAdmin && <TableHead className="w-[60px]"></TableHead>}
@@ -289,6 +292,9 @@ function EntriesTable({
                       <TableCell className="text-sm text-muted-foreground">
                         {resolveZone(e.rejectionType.type)}
                       </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {e.createdByUsername || "Unknown"}
+                      </TableCell>
                       <TableCell className="text-right font-display font-bold text-lg">{e.quantity}</TableCell>
                       <TableCell className="text-sm text-muted-foreground truncate max-w-[260px]" title={e.remarks || ""}>
                         {e.remarks || "—"}
@@ -348,6 +354,9 @@ function EntriesTable({
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {resolveZone(e.reworkType.zone)}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {e.createdByUsername || "Unknown"}
                       </TableCell>
                       <TableCell className="text-right font-display font-bold text-lg">{e.quantity}</TableCell>
                       <TableCell className="text-sm text-muted-foreground truncate max-w-[260px]" title={e.remarks || ""}>
