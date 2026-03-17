@@ -160,6 +160,7 @@ export async function initDb(): Promise<void> {
     ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "rejection_reason" text;
     ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "imported_at" timestamp;
     ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "zone_id" integer REFERENCES "zones"("id");
+    ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text;
 
       ALTER TABLE "rework_types" ADD COLUMN IF NOT EXISTS "zone" text;
 
@@ -168,6 +169,7 @@ export async function initDb(): Promise<void> {
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "process" text;
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "imported_at" timestamp;
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "zone_id" integer REFERENCES "zones"("id");
+    ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text;
 
     ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "role" text NOT NULL DEFAULT 'employee';
     ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "username" text;
@@ -237,6 +239,20 @@ export async function initDb(): Promise<void> {
       SELECT MIN("id") FROM "users" WHERE "organization_id" IS NOT NULL GROUP BY "organization_id"
     ) AND "role" = 'employee';
   `);
+
+  // Run column additions individually so a failure in the block above
+  // (or a previously-partial migration) cannot leave these columns missing.
+  const columnMigrations = [
+    `ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text`,
+    `ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text`,
+  ];
+  for (const sql of columnMigrations) {
+    try {
+      await pool.query(sql);
+    } catch (err: any) {
+      console.warn("[db] Column migration skipped:", err.message);
+    }
+  }
 
   console.log(`[db] Pool ready (host: ${parsed.hostname})`);
 }
