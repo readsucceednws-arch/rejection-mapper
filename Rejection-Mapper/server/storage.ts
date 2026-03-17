@@ -87,7 +87,7 @@ export interface IStorage {
 
   // Rejection Entries
   getRejectionEntries(organizationId: number, filters?: { startDate?: string; endDate?: string; partId?: number; rejectionTypeId?: number; type?: string }): Promise<RejectionEntryResponse[]>;
-  createRejectionEntry(entry: InsertRejectionEntry & { date?: Date; createdByUsername?: string | null }): Promise<RejectionEntryResponse>;
+  createRejectionEntry(entry: InsertRejectionEntry & { date?: Date }): Promise<RejectionEntryResponse>;
   updateRejectionEntry(id: number, organizationId: number, data: { rejectionTypeId?: number; quantity?: number; remarks?: string | null }): Promise<RejectionEntryResponse>;
   findDuplicateRejectionEntry(orgId: number, date: Date, partId: number, rejectionTypeId: number, quantity: number): Promise<boolean>;
   bulkDeleteRejectionEntries(ids: number[], organizationId: number): Promise<void>;
@@ -101,7 +101,7 @@ export interface IStorage {
 
   // Rework Entries
   getReworkEntries(organizationId: number, filters?: { startDate?: string; endDate?: string; partId?: number; reworkTypeId?: number }): Promise<ReworkEntryResponse[]>;
-  createReworkEntry(entry: InsertReworkEntry & { createdByUsername?: string | null; date?: Date }): Promise<ReworkEntryResponse>;
+  createReworkEntry(entry: InsertReworkEntry & { date?: Date }): Promise<ReworkEntryResponse>;
   updateReworkEntry(id: number, organizationId: number, data: { reworkTypeId?: number; quantity?: number; remarks?: string | null }): Promise<ReworkEntryResponse>;
   bulkDeleteReworkEntries(ids: number[], organizationId: number): Promise<void>;
 
@@ -279,9 +279,8 @@ export class DatabaseStorage implements IStorage {
     await db.delete(rejectionEntries).where(and(inArray(rejectionEntries.id, ids), eq(rejectionEntries.organizationId, organizationId)));
   }
 
-  async createRejectionEntry(entry: InsertRejectionEntry & { date?: Date; createdByUsername?: string | null }): Promise<RejectionEntryResponse> {
-    const { createdByUsername: _omit, ...insertPayload } = entry;
-    const [created] = await db.insert(rejectionEntries).values(insertPayload).returning();
+  async createRejectionEntry(entry: InsertRejectionEntry & { date?: Date }): Promise<RejectionEntryResponse> {
+    const [created] = await db.insert(rejectionEntries).values(entry).returning();
 
     const populated = await db.query.rejectionEntries.findFirst({
       where: eq(rejectionEntries.id, created.id),
@@ -354,9 +353,8 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async createReworkEntry(entry: InsertReworkEntry & { createdByUsername?: string | null; date?: Date }): Promise<ReworkEntryResponse> {
-    const { createdByUsername: _omit, ...insertPayload } = entry;
-    const [created] = await db.insert(reworkEntries).values(insertPayload).returning();
+  async createReworkEntry(entry: InsertReworkEntry & { date?: Date }): Promise<ReworkEntryResponse> {
+    const [created] = await db.insert(reworkEntries).values(entry).returning();
 
     const populated = await db.query.reworkEntries.findFirst({
       where: eq(reworkEntries.id, created.id),
