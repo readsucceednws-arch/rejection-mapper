@@ -179,7 +179,8 @@ export default function LogEntry() {
       setEntries([]);
       setLocation("/entries");
     } catch (error) {
-      toast({ title: "Error", description: "Failed to log entries", variant: "destructive" });
+      const message = error instanceof Error ? error.message : "Failed to log entries";
+      toast({ title: "Error", description: message, variant: "destructive" });
     }
   };
 
