@@ -472,14 +472,14 @@ export default function LogEntry() {
                     </div>
 
                     <div>
-                      <label className="text-xs font-medium text-muted-foreground">Reason *</label>
+                      <label className="text-xs font-medium text-muted-foreground">Zone *</label>
                       {(() => {
                         const codeOptions =
                           newEntry.purpose === "rejection"
                             ? (rejectionTypes ?? []).map((t) => ({
                                 id: t.id,
                                 code: t.rejectionCode,
-                                zone: t.type,
+                                zone: undefined,
                               }))
                             : (reworkTypes ?? []).map((t) => ({
                                 id: t.id,
