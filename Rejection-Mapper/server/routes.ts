@@ -540,13 +540,13 @@ export async function registerRoutes(
       const { entryDate, ...rest } = input;
       const entryDateObj = entryDate ? new Date(entryDate) : undefined;
 
-      const entryPayload: Parameters<typeof storage.createRejectionEntry>[0] = {
+      const entryPayload = {
         ...rest,
         organizationId: orgId,
-        loggedByUserId: user.id,
+        createdByUsername: user.username ?? user.email ?? null,
         ...(entryDateObj ? { date: entryDateObj } : {}),
       };
-      const created = await storage.createRejectionEntry(entryPayload);
+      const created = await storage.createRejectionEntry(entryPayload as any);
       res.status(201).json(created);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -692,9 +692,9 @@ export async function registerRoutes(
       const created = await storage.createReworkEntry({
         ...rest,
         organizationId: orgId,
-        loggedByUserId: user.id,
+        createdByUsername: user.username ?? user.email ?? null,
         ...(entryDateObj ? { date: entryDateObj } : {}),
-      });
+      } as any);
       res.status(201).json(created);
     } catch (err) {
       if (err instanceof z.ZodError) {
