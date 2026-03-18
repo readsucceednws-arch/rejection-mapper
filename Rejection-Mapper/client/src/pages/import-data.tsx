@@ -73,7 +73,6 @@ type ColumnMap = {
   rate:          string | null;
   amount:        string | null;
   remarks:       string | null;
-  zone:          string | null;
 };
 
 type FieldType = "date" | "number" | "currency" | "quantity" | "partNumber" | "rejectionCode" | "process" | "text";
@@ -93,7 +92,6 @@ type NormalizedRow = {
   process: string | null;
   rate: number | null;
   amount: number | null;
-  zone: string | null;
   sourceSheet: string;
   _raw: Row;
 };
@@ -149,7 +147,6 @@ const DESC_SLUGS      = new Set(["description","desc","name","partname","itemnam
 const PURPOSE_SLUGS   = new Set(["purpose","process","type","category","entrytype","operation","stage","workstage","operationtype"]);
 const QTY_SLUGS       = new Set(["quantity","qty","count","units","pcs","pieces","nos","quantityrejected","rejectedqty","rejqty","totalqty","noofpieces"]);
 const REMARKS_SLUGS   = new Set(["remarks","notes","note","comment","comments","observation","observations","remark"]);
-const ZONE_SLUGS      = new Set(["zone","area","sector","department","section","location","line","floor","zonearea","workarea","productionzone"]);
 const DATE_SLUGS      = new Set(["date","entrydate","transactiondate","logdate","entrydt","dateofentry","dateofrejection","inspectiondate"]);
 const RATE_SLUGS      = new Set(["rate","unitrate","price","unitprice","cost","unitcost","costperunit"]);
 const AMOUNT_SLUGS    = new Set(["amount","value","total","totalamount","totalvalue","totalcost","linecost"]);
@@ -190,7 +187,7 @@ const PHRASE_ALIASES: { phrase: string; weight: number }[] = [
 const ALL_KNOWN_SLUGS = new Set([
   ...PART_SLUGS, ...REWORK_SLUGS, ...REJECTION_SLUGS, ...CODE_SLUGS,
   ...DESC_SLUGS, ...PURPOSE_SLUGS, ...QTY_SLUGS, ...REMARKS_SLUGS,
-  ...DATE_SLUGS, ...RATE_SLUGS, ...AMOUNT_SLUGS, ...ZONE_SLUGS,
+  ...DATE_SLUGS, ...RATE_SLUGS, ...AMOUNT_SLUGS,
 ]);
 
 /** Score a raw header cell using both slug-set matching and phrase matching */
@@ -301,7 +298,6 @@ function canonicalForHeader(h: string): keyof ColumnMap | null {
   if (matchesAny(h, RATE_SLUGS))      return "rate";
   if (matchesAny(h, AMOUNT_SLUGS))    return "amount";
   if (matchesAny(h, REMARKS_SLUGS))   return "remarks";
-  if (matchesAny(h, ZONE_SLUGS))      return "zone";
   return null;
 }
 
@@ -339,7 +335,6 @@ function buildColumnMap(headers: string[]): ColumnMap {
     rate:          findHeader(headers, RATE_SLUGS),
     amount:        findHeader(headers, AMOUNT_SLUGS),
     remarks:       findHeader(headers, REMARKS_SLUGS),
-    zone:          findHeader(headers, ZONE_SLUGS),
   };
 }
 
@@ -681,7 +676,6 @@ const CANONICAL_FIELDS: { key: keyof ColumnMap; label: string }[] = [
   { key: "description",   label: "Description / Name" },
   { key: "quantity",      label: "Quantity" },
   { key: "process",       label: "Process / Purpose" },
-  { key: "zone",          label: "Zone / Area" },
   { key: "date",          label: "Date" },
   { key: "rate",          label: "Rate / Price" },
   { key: "amount",        label: "Amount / Value" },
