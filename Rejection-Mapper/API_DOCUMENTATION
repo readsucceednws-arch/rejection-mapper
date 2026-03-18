@@ -79,6 +79,7 @@ Content-Type: application/json
 - `Rejection Code`, `rejection_code`
 - `Rework Code`, `rework_code`
 - `Rej Code`, `rej_code`
+- `Reason`, `reason` (fallback if Code column not found)
 
 #### Purpose/Reason
 - `Purpose`, `purpose`
@@ -220,7 +221,7 @@ Array of detailed operation logs for debugging:
 #### Optional Fields with Defaults
 - **Type** - Defaults to "rejection" if missing
 - **Quantity** - Defaults to 1 if missing
-- **Date** - Defaults to current date if missing
+- **Date** - Multiple formats supported: DD-MM-YYYY, YYYY-MM-DD, MM/DD/YYYY. Falls back to current date if invalid
 - **Zone** - Stored as NULL if missing
 - **Remarks/Notes** - Stored as NULL if missing
 - **Purpose/Reason** - Used to populate reason field if available
@@ -229,7 +230,13 @@ Array of detailed operation logs for debugging:
 - **All text** - Trimmed of leading/trailing whitespace
 - **Part Numbers** - Case-insensitive matching (Part A = PART A)
 - **Codes** - Uppercase, spaces removed (CODE-001 normalized)
-- **Dates** - Multiple formats supported, current date if invalid
+- **Dates** - Multiple formats:
+  - DD-MM-YYYY (01-04-2025) **← Used in Excel exports**
+  - YYYY-MM-DD (2025-04-01)
+  - MM/DD/YYYY (04/01/2025)
+  - DD/MM/YYYY (01/04/2025)
+  - ISO 8601 and other standard formats
+  - Falls back to current date if unparseable
 - **Numbers** - Currency symbols and commas removed
 
 ### Fallback Logic
@@ -390,8 +397,106 @@ Summary: failedRows includes this row
 
 ---
 
+## API Documentation: POST /api/import-entries/:id/cancel
+
+### Overview
+Cancels an ongoing import operation. The import will finish processing the current row and then halt.
+
+### Authentication
+**Required:** Admin role (checked via `isAdmin` middleware)
+
+### Request
+
+#### HTTP Method & Path
+```
+POST /api/import-entries/:id/cancel
+```
+
+#### Path Parameters
+- `id` (string) - The `importId` returned from the initial import request
+
+#### Headers
+```
+Content-Type: application/json
+```
+
+#### Request Example
+```bash
+curl -X POST http://localhost:3000/api/import-entries/abc123def456xyz/cancel \
+  -H "Content-Type: application/json" \
+  -H "Cookie: session=..."
+```
+
+### Response
+
+#### Success Response (200 OK)
+```json
+{
+  "success": true,
+  "message": "Import cancellation requested. Current row processing will halt.",
+  "importId": "abc123def456xyz"
+}
+```
+
+#### Import Not Found (404)
+```json
+{
+  "success": false,
+  "message": "Import not found or already completed"
+}
+```
+
+### Behavior
+
+- **Immediate Effect**: Sets the cancelled flag for the import operation
+- **Row Completion**: Current row being processed will complete before halting
+- **Cleanup**: Import state is automatically removed after completion
+- **Response Timing**: Original import request will respond with cancellation details
+
+### Usage Example
+
+```typescript
+// Start a large import
+const importResponse = await fetch('/api/import-entries', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ rows: largeDataset })
+});
+const { importId } = await importResponse.json();
+
+// Realize you need to stop it
+const cancelResponse = await fetch(`/api/import-entries/${importId}/cancel`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' }
+});
+
+// Original import request will respond with this
+// {
+//   "success": false,
+//   "message": "Import cancelled at row 250. 250 of 1000 rows imported before cancellation.",
+//   "cancelled": true,
+//   "importId": "...",
+//   "summary": {...}
+// }
+```
+
+### React Hook Integration
+
+```typescript
+const { importEntries, cancelImport, currentImportId } = useImportEntries();
+
+// Start importEntries in background
+await importEntries(rows);
+
+// If user wants to stop
+await cancelImport(); // Calls cancel endpoint internally
+```
+
+---
+
 ### Related Endpoints
 
+- `POST /api/import-entries` - Start a new import
 - `GET /api/parts` - List existing parts
 - `GET /api/rejection-types` - List existing rejection types
 - `GET /api/rework-types` - List existing rework types
