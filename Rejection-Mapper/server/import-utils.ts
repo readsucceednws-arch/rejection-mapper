@@ -51,14 +51,35 @@ export function safeNumber(value: unknown): number | null {
 }
 
 /**
- * Safely parse a date - handles multiple formats
- * Supported: DD-MM-YYYY, YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, ISO 8601, etc.
+ * Safely parse a date - handles multiple formats including Excel serial numbers
+ * Supported: DD-MM-YYYY, YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, ISO 8601, Excel serial numbers, etc.
  */
 export function safeDate(value: unknown): Date | null {
   const text = normalizeText(value);
   if (!text) return null;
   
-  // Try standard Date parsing first
+  // Try Excel serial number format (Excel stores dates as numbers: 1 = Jan 1, 1900)
+  // Handle both integer and decimal serial numbers
+  const serialNum = parseFloat(text);
+  if (!isNaN(serialNum) && text.match(/^\d+(\.\d+)?$/)) {
+    // If it looks like an Excel serial number (large integer)
+    if (serialNum > 0 && serialNum < 999999) {
+      // Excel's epoch: January 1, 1900
+      // Excel has a known bug where it thinks 1900 is a leap year, so we adjust
+      const excelEpoch = new Date(1900, 0, 1);
+      const daysFromEpoch = Math.floor(serialNum) - 1; // Subtract 1 because Excel starts at 1, not 0
+      
+      // Account for Excel's leap year bug (it thinks 1900 is a leap year)
+      const adjustedDays = daysFromEpoch > 59 ? daysFromEpoch + 1 : daysFromEpoch;
+      
+      const date = new Date(excelEpoch.getTime() + adjustedDays * 24 * 60 * 60 * 1000);
+      if (!Number.isNaN(date.getTime()) && date.getFullYear() > 1900 && date.getFullYear() < 2100) {
+        return date;
+      }
+    }
+  }
+  
+  // Try standard Date parsing first (handles ISO 8601, etc.)
   try {
     const date = new Date(text);
     if (!Number.isNaN(date.getTime())) {
