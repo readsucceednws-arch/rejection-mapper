@@ -392,7 +392,7 @@ export async function registerRoutes(
     res.json(items);
   });
 
-  app.post(api.parts.create.path, isAuthenticated, async (req, res) => {
+  app.post(api.parts.create.path, isAdmin, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const input = api.parts.create.input.parse(req.body);
@@ -406,7 +406,7 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/parts/:id", isAuthenticated, async (req, res) => {
+  app.put("/api/parts/:id", isAdmin, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const id = getParamId(req.params.id);
@@ -431,7 +431,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/parts/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/parts/:id", isAdmin, async (req, res) => {
     const orgId = getOrgId(req);
     await storage.deletePart(getParamId(req.params.id), orgId);
     res.status(204).end();
@@ -444,7 +444,7 @@ export async function registerRoutes(
     res.json(items);
   });
 
-  app.post(api.rejectionTypes.create.path, isAuthenticated, async (req, res) => {
+  app.post(api.rejectionTypes.create.path, isAdmin, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const input = api.rejectionTypes.create.input.parse(req.body);
@@ -458,7 +458,7 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/rejection-types/:id", isAuthenticated, async (req, res) => {
+  app.put("/api/rejection-types/:id", isAdmin, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const id = getParamId(req.params.id);
@@ -483,7 +483,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/rejection-types/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/rejection-types/:id", isAdmin, async (req, res) => {
     const orgId = getOrgId(req);
     await storage.deleteRejectionType(getParamId(req.params.id), orgId);
     res.status(204).end();
@@ -597,7 +597,7 @@ export async function registerRoutes(
     res.json(items);
   });
 
-  app.post("/api/rework-types", isAuthenticated, async (req, res) => {
+  app.post("/api/rework-types", isAdmin, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const parsed = z.object({
@@ -619,7 +619,7 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/rework-types/:id", isAuthenticated, async (req, res) => {
+  app.put("/api/rework-types/:id", isAdmin, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const id = getParamId(req.params.id);
@@ -652,7 +652,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/rework-types/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/rework-types/:id", isAdmin, async (req, res) => {
     const orgId = getOrgId(req);
     await storage.deleteReworkType(getParamId(req.params.id), orgId);
     res.status(204).end();
@@ -809,7 +809,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/zones", isAuthenticated, async (req, res) => {
+  app.post("/api/zones", isAdmin, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const { insertZoneSchema } = await import("@shared/schema");
@@ -824,7 +824,7 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/zones/:id", isAuthenticated, async (req, res) => {
+  app.put("/api/zones/:id", isAdmin, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const id = getParamId(req.params.id);
@@ -842,7 +842,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/zones/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/zones/:id", isAdmin, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       await storage.deleteZone(getParamId(req.params.id), orgId);
