@@ -3,6 +3,7 @@ import {
   insertPartSchema, 
   insertRejectionTypeSchema, 
   insertRejectionEntrySchema,
+  insertReworkEntrySchema,
   parts,
   rejectionTypes,
 } from './schema';
@@ -88,6 +89,35 @@ export const api = {
         400: errorSchemas.validation,
       },
     }
+  },
+  reworkEntries: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/rework-entries' as const,
+      input: z.object({
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
+        partId: z.coerce.number().optional(),
+        reworkTypeId: z.coerce.number().optional(),
+      }).optional(),
+      responses: {
+        200: z.array(z.custom<any>()),
+      },
+    },
+    create: {
+      method: 'POST' as const,
+      path: '/api/rework-entries' as const,
+      input: insertReworkEntrySchema.extend({
+        partId: z.coerce.number(),
+        reworkTypeId: z.coerce.number(),
+        quantity: z.coerce.number().default(1),
+        entryDate: z.string().optional(),
+      }),
+      responses: {
+        201: z.custom<any>(),
+        400: z.object({ message: z.string(), field: z.string().optional() }),
+      },
+    },
   },
   reports: {
     summary: {
