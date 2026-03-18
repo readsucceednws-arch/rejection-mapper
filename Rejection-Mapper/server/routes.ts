@@ -30,6 +30,36 @@ function isAdmin(req: any, res: any, next: any) {
   next();
 }
 
+// ─── IMPORT STATE MANAGEMENT ───
+interface ImportState {
+  cancelled: boolean;
+  startTime: number;
+  orgId: number;
+}
+
+const activeImports = new Map<string, ImportState>();
+
+function generateImportId(): string {
+  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+}
+
+function createImportState(orgId: number): { id: string; state: ImportState } {
+  const id = generateImportId();
+  const state: ImportState = {
+    cancelled: false,
+    startTime: Date.now(),
+    orgId,
+  };
+  activeImports.set(id, state);
+  
+  // Auto-cleanup after 1 hour
+  setTimeout(() => {
+    activeImports.delete(id);
+  }, 60 * 60 * 1000);
+  
+  return { id, state };
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -872,20 +902,25 @@ export async function registerRoutes(
 
     const logger = new ImportLogger();
     const summary = createEmptySummary();
+    
+    // Create import state for potential cancellation
+    const orgId = getOrgId(req);
+    const { id: importId, state: importState } = createImportState(orgId);
 
     try {
-      const orgId = getOrgId(req);
       const { rows, dryRun }: { rows: Record<string, any>[]; dryRun?: boolean } = req.body;
 
       if (!Array.isArray(rows) || rows.length === 0) {
+        activeImports.delete(importId);
         return res.status(400).json({ 
           message: "No rows provided", 
-          summary 
+          summary,
+          importId
         });
       }
 
       summary.totalRows = rows.length;
-      logger.info(`Starting import of ${rows.length} rows`, { dryRun: !!dryRun });
+      logger.info(`Starting import of ${rows.length} rows`, { dryRun: !!dryRun, importId });
 
       // Load existing data
       const existingParts = await storage.getParts(orgId);
@@ -916,6 +951,20 @@ export async function registerRoutes(
 
       // Process each row
       for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+        // Check if import was cancelled
+        if (importState.cancelled) {
+          logger.warn(`Import cancelled by user at row ${rowIndex + 1}`);
+          activeImports.delete(importId);
+          return res.json({
+            success: false,
+            message: `Import cancelled at row ${rowIndex + 1}. ${summary.successfulImports} of ${summary.totalRows} rows imported before cancellation.`,
+            summary,
+            importId,
+            cancelled: true,
+            logs: logger.getLogs(),
+          });
+        }
+        
         const row = rows[rowIndex];
         const rowNum = rowIndex + 1;
 
@@ -935,11 +984,12 @@ export async function registerRoutes(
           );
           const code = normalizeText(
             row.Code || row.code || row.CODE || 
-            row["Rejection Code"] || row["Rework Code"] || ""
+            row["Rejection Code"] || row["Rework Code"] || 
+            row.Reason || row.reason || ""  // Also check Reason column as fallback
           );
           const purpose = normalizeText(
-            row.Purpose || row.purpose || row.Reason || 
-            row.Description || ""
+            row.Purpose || row.purpose || 
+            row.Description || row.description || ""
           );
           const zone = normalizeText(
             row.Zone || row.zone || row.ZONE || ""
@@ -1202,6 +1252,26 @@ export async function registerRoutes(
         logs: logger.getLogs(),
       });
     }
+  });
+
+  // Cancel an ongoing import
+  app.post("/api/import-entries/:id/cancel", isAdmin, (req, res) => {
+    const importId = getParamString(req.params.id);
+    const importState = activeImports.get(importId);
+
+    if (!importState) {
+      return res.status(404).json({
+        success: false,
+        message: "Import not found or already completed",
+      });
+    }
+
+    importState.cancelled = true;
+    res.json({
+      success: true,
+      message: "Import cancellation requested. Current row processing will halt.",
+      importId,
+    });
   });
 
   return httpServer;
