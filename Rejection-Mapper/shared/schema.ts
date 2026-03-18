@@ -67,6 +67,7 @@ export const rejectionEntries = pgTable("rejection_entries", {
   process: text("process"),
   rejectionReasonCode: text("rejection_reason_code"),
   rejectionReason: text("rejection_reason"),
+  loggedByUserId: integer("logged_by_user_id").references(() => users.id),
   importedAt: timestamp("imported_at"),
   zoneId: integer("zone_id").references(() => zones.id),
 });
@@ -92,6 +93,7 @@ export const reworkEntries = pgTable("rework_entries", {
   rate: doublePrecision("rate"),
   amount: doublePrecision("amount"),
   process: text("process"),
+  loggedByUserId: integer("logged_by_user_id").references(() => users.id),
   importedAt: timestamp("imported_at"),
   zoneId: integer("zone_id").references(() => zones.id),
 });
@@ -182,6 +184,10 @@ export const rejectionEntriesRelations = relations(
       fields: [rejectionEntries.zoneId],
       references: [zones.id],
     }),
+    loggedBy: one(users, {
+      fields: [rejectionEntries.loggedByUserId],
+      references: [users.id],
+    }),
   })
 );
 
@@ -213,6 +219,10 @@ export const reworkEntriesRelations = relations(reworkEntries, ({ one }) => ({
     fields: [reworkEntries.zoneId],
     references: [zones.id],
   }),
+  loggedBy: one(users, {
+    fields: [reworkEntries.loggedByUserId],
+    references: [users.id],
+  }),
 }));
 
 // === BASE SCHEMAS ===
@@ -240,6 +250,7 @@ export const insertRejectionEntrySchema = createInsertSchema(
   id: true,
   date: true,
   importedAt: true,
+  loggedByUserId: true,
 });
 
 export const insertReworkTypeSchema = createInsertSchema(reworkTypes).omit({
@@ -252,6 +263,7 @@ export const insertReworkEntrySchema = createInsertSchema(
   id: true,
   date: true,
   importedAt: true,
+  loggedByUserId: true,
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -295,10 +307,12 @@ export type RejectionEntryResponse = RejectionEntry & {
   part: Part;
   rejectionType: RejectionType;
   zone?: Zone | null;
+  loggedByUsername?: string | null;
 };
 
 export type ReworkEntryResponse = ReworkEntry & {
   part: Part;
   reworkType: ReworkType;
   zone?: Zone | null;
+  loggedByUsername?: string | null;
 };
