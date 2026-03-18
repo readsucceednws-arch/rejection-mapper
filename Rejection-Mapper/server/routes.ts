@@ -852,5 +852,357 @@ export async function registerRoutes(
     }
   });
 
+  // --- ENTRIES IMPORT (Robust with fallback logic) ---
+  app.post("/api/import-entries", isAdmin, async (req, res, next) => {
+    const { 
+      ImportLogger, 
+      normalizeText, 
+      normalizeCode, 
+      normalizeForMatching,
+      safeNumber, 
+      safeDate, 
+      isBlank, 
+      flexibleMatch,
+      getRowCell,
+      createEmptySummary,
+      addFailedRow,
+      addWarning,
+      formatRowError 
+    } = await import("./import-utils");
+
+    const logger = new ImportLogger();
+    const summary = createEmptySummary();
+
+    try {
+      const orgId = getOrgId(req);
+      const { rows, dryRun }: { rows: Record<string, any>[]; dryRun?: boolean } = req.body;
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return res.status(400).json({ 
+          message: "No rows provided", 
+          summary 
+        });
+      }
+
+      summary.totalRows = rows.length;
+      logger.info(`Starting import of ${rows.length} rows`, { dryRun: !!dryRun });
+
+      // Load existing data
+      const existingParts = await storage.getParts(orgId);
+      const existingRejectionTypes = await storage.getRejectionTypes(orgId);
+      const existingReworkTypes = await storage.getReworkTypes(orgId);
+      const existingZones = await storage.getZones(orgId);
+
+      logger.debug(`Loaded existing data`, {
+        parts: existingParts.length,
+        rejectionTypes: existingRejectionTypes.length,
+        reworkTypes: existingReworkTypes.length,
+        zones: existingZones.length,
+      });
+
+      // Build lookup maps for efficient flexible matching
+      const partMap = new Map(
+        existingParts.map(p => [normalizeForMatching(p.partNumber), p])
+      );
+      const rejectionCodeMap = new Map(
+        existingRejectionTypes.map(rt => [normalizeCode(rt.rejectionCode), rt])
+      );
+      const reworkCodeMap = new Map(
+        existingReworkTypes.map(rw => [normalizeCode(rw.reworkCode), rw])
+      );
+      const zoneMap = new Map(
+        existingZones.map(z => [normalizeForMatching(z.name), z])
+      );
+
+      // Process each row
+      for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+        const row = rows[rowIndex];
+        const rowNum = rowIndex + 1;
+
+        try {
+          // Extract fields with flexible column matching
+          const dateStr = normalizeText(
+            row.Date || row.date || row.DATE || 
+            row["Entry Date"] || row["entry_date"] || ""
+          );
+          const partNumber = normalizeText(
+            row["Part Number"] || row["part_number"] || row["Part No"] || 
+            row["PN"] || row.Part || row.Item || ""
+          );
+          const typeField = normalizeText(
+            row.Type || row.type || row.TYPE || 
+            row["Entry Type"] || row.Category || ""
+          );
+          const code = normalizeText(
+            row.Code || row.code || row.CODE || 
+            row["Rejection Code"] || row["Rework Code"] || ""
+          );
+          const purpose = normalizeText(
+            row.Purpose || row.purpose || row.Reason || 
+            row.Description || ""
+          );
+          const zone = normalizeText(
+            row.Zone || row.zone || row.ZONE || ""
+          );
+          const quantityStr = normalizeText(
+            row.Quantity || row.quantity || row.Qty || row.QTY || "1"
+          );
+          const remarks = normalizeText(
+            row.Remarks || row.remarks || row.Notes || row.notes || ""
+          );
+
+          // Validate required fields
+          if (isBlank(partNumber)) {
+            addFailedRow(summary, rowNum, "Missing part number");
+            logger.warn(formatRowError(rowNum, "Missing part number"), { row });
+            continue;
+          }
+
+          if (isBlank(code)) {
+            addFailedRow(summary, rowNum, "Missing rejection/rework code");
+            logger.warn(formatRowError(rowNum, "Missing code"), { row });
+            continue;
+          }
+
+          // Parse quantity
+          const quantity = safeNumber(quantityStr) || 1;
+          if (!Number.isFinite(quantity) || quantity <= 0) {
+            addFailedRow(summary, rowNum, `Invalid quantity: ${quantityStr}`);
+            logger.warn(formatRowError(rowNum, "Invalid quantity", quantityStr), { row });
+            continue;
+          }
+
+          // Parse date (default to now if missing)
+          const entryDate = safeDate(dateStr) || new Date();
+
+          // Determine entry type (rejection vs rework)
+          const typeNorm = normalizeForMatching(typeField).toLowerCase();
+          const isRework = typeNorm.includes("rework") || typeNorm.includes("rw");
+
+          logger.debug(`Processing row ${rowNum}`, {
+            partNumber,
+            code,
+            type: isRework ? "rework" : "rejection",
+            quantity,
+          });
+
+          // Get or create part
+          let part = partMap.get(normalizeForMatching(partNumber));
+          if (!part) {
+            logger.info(`Creating new part: ${partNumber}`);
+            if (!dryRun) {
+              part = await storage.createPart({
+                partNumber,
+                description: purpose || partNumber,
+                price: 0,
+                organizationId: orgId,
+              });
+              partMap.set(normalizeForMatching(partNumber), part);
+              summary.created.parts++;
+            } else {
+              // In dry run, create a fake part object
+              part = { 
+                id: -1, 
+                partNumber, 
+                description: purpose || partNumber,
+                price: 0,
+                organizationId: orgId
+              };
+            }
+          }
+
+          if (!part) {
+            addFailedRow(summary, rowNum, "Failed to get or create part");
+            logger.error(formatRowError(rowNum, "Failed to get or create part"), { partNumber });
+            continue;
+          }
+
+          // Get or create rejection/rework type
+          const normalizedCode = normalizeCode(code);
+
+          if (isRework) {
+            let reworkType = reworkCodeMap.get(normalizedCode);
+            if (!reworkType) {
+              logger.info(`Creating new rework type: ${normalizedCode}`);
+              if (!dryRun) {
+                reworkType = await storage.createReworkType({
+                  reworkCode: normalizedCode,
+                  reason: purpose || normalizedCode,
+                  zone: zone || null,
+                  organizationId: orgId,
+                });
+                reworkCodeMap.set(normalizedCode, reworkType);
+                summary.created.reworkTypes++;
+              } else {
+                reworkType = {
+                  id: -1,
+                  reworkCode: normalizedCode,
+                  reason: purpose || normalizedCode,
+                  zone: zone || null,
+                  organizationId: orgId,
+                };
+              }
+            }
+
+            if (!reworkType) {
+              addFailedRow(summary, rowNum, "Failed to get or create rework type");
+              logger.error(formatRowError(rowNum, "Failed to get or create rework type"), { code: normalizedCode });
+              continue;
+            }
+
+            // Get or create zone if specified
+            let zoneId: number | null = null;
+            if (!isBlank(zone)) {
+              let zoneObj = zoneMap.get(normalizeForMatching(zone));
+              if (!zoneObj) {
+                logger.info(`Creating new zone: ${zone}`);
+                if (!dryRun) {
+                  zoneObj = await storage.createZone({
+                    name: zone,
+                    organizationId: orgId,
+                  });
+                  zoneMap.set(normalizeForMatching(zone), zoneObj);
+                  summary.created.zones++;
+                } else {
+                  zoneObj = {
+                    id: -1,
+                    name: zone,
+                    organizationId: orgId,
+                    createdAt: new Date(),
+                  };
+                }
+              }
+              zoneId = zoneObj?.id || null;
+            }
+
+            // Create rework entry
+            if (!dryRun) {
+              await storage.createReworkEntry({
+                partId: part.id,
+                reworkTypeId: reworkType.id,
+                quantity,
+                remarks: remarks || null,
+                date: entryDate,
+                organizationId: orgId,
+                createdByUsername: (req.user as User).username ?? (req.user as User).email ?? null,
+                zoneId,
+              } as any);
+            }
+
+            logger.debug(`Rework entry processed for row ${rowNum}`);
+          } else {
+            // Rejection type
+            let rejectionType = rejectionCodeMap.get(normalizedCode);
+            if (!rejectionType) {
+              logger.info(`Creating new rejection type: ${normalizedCode}`);
+              if (!dryRun) {
+                rejectionType = await storage.createRejectionType({
+                  rejectionCode: normalizedCode,
+                  reason: purpose || normalizedCode,
+                  type: "rejection",
+                  organizationId: orgId,
+                });
+                rejectionCodeMap.set(normalizedCode, rejectionType);
+                summary.created.rejectionTypes++;
+              } else {
+                rejectionType = {
+                  id: -1,
+                  rejectionCode: normalizedCode,
+                  reason: purpose || normalizedCode,
+                  type: "rejection",
+                  organizationId: orgId,
+                };
+              }
+            }
+
+            if (!rejectionType) {
+              addFailedRow(summary, rowNum, "Failed to get or create rejection type");
+              logger.error(formatRowError(rowNum, "Failed to get or create rejection type"), { code: normalizedCode });
+              continue;
+            }
+
+            // Get or create zone if specified
+            let zoneId: number | null = null;
+            if (!isBlank(zone)) {
+              let zoneObj = zoneMap.get(normalizeForMatching(zone));
+              if (!zoneObj) {
+                logger.info(`Creating new zone: ${zone}`);
+                if (!dryRun) {
+                  zoneObj = await storage.createZone({
+                    name: zone,
+                    organizationId: orgId,
+                  });
+                  zoneMap.set(normalizeForMatching(zone), zoneObj);
+                  summary.created.zones++;
+                } else {
+                  zoneObj = {
+                    id: -1,
+                    name: zone,
+                    organizationId: orgId,
+                    createdAt: new Date(),
+                  };
+                }
+              }
+              zoneId = zoneObj?.id || null;
+            }
+
+            // Create rejection entry
+            if (!dryRun) {
+              await storage.createRejectionEntry({
+                partId: part.id,
+                rejectionTypeId: rejectionType.id,
+                quantity,
+                remarks: remarks || null,
+                date: entryDate,
+                organizationId: orgId,
+                createdByUsername: (req.user as User).username ?? (req.user as User).email ?? null,
+                zoneId,
+              } as any);
+            }
+
+            logger.debug(`Rejection entry processed for row ${rowNum}`);
+          }
+
+          summary.successfulImports++;
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          addFailedRow(summary, rowNum, errorMsg);
+          logger.error(formatRowError(rowNum, "Exception during processing", errorMsg), { 
+            error: err, 
+            row 
+          });
+        }
+      }
+
+      if (dryRun) {
+        logger.info("DRY RUN COMPLETE - No data was inserted");
+        addWarning(summary, "This was a dry run - no data was actually imported");
+      } else {
+        logger.info(`Import complete`, {
+          successful: summary.successfulImports,
+          failed: summary.failedRows.length,
+          created: summary.created,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: dryRun 
+          ? `Dry run: Would import ${summary.successfulImports} of ${summary.totalRows} rows`
+          : `Imported ${summary.successfulImports} of ${summary.totalRows} rows`,
+        summary,
+        logs: logger.getLogs(),
+      });
+    } catch (err) {
+      logger.error("Import failed with fatal error", { error: err });
+      res.status(500).json({
+        success: false,
+        message: err instanceof Error ? err.message : "Import failed",
+        summary,
+        logs: logger.getLogs(),
+      });
+    }
+  });
+
   return httpServer;
 }
