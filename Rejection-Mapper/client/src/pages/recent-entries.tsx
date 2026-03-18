@@ -101,6 +101,11 @@ const RE_CODE = new Set([
   "typecode",
   "failurecode",
   "defectcode",
+  // Also match "Reason" / "Purpose" column headers used in standard Excel exports
+  "reason",
+  "purpose",
+  "reworkreason",
+  "rejectionreason",
 ]);
 
 const RE_QTY = new Set([
@@ -814,20 +819,29 @@ export default function RecentEntries() {
       const quantity = parseInt(fuzzyFind(row, RE_QTY) || "1") || 1;
       const remarks = fuzzyFind(row, RE_REM);
 
+      // Normalize helper: lowercase, strip extra spaces and special chars for flexible matching
+      const norm = (v: string | null | undefined) =>
+        (v ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+      const normCode = (v: string | null | undefined) =>
+        (v ?? "").toUpperCase().replace(/\s+/g, "").replace(/[\u2010-\u2014]/g, "-");
+
       const part = parts?.find(
-        (p) => p.partNumber.toLowerCase() === partNumber?.toLowerCase()
+        (p) => norm(p.partNumber) === norm(partNumber)
       );
+
+      const normalizedCodeOrReason = norm(codeOrReason);
+      const normalizedCodeUpper = normCode(codeOrReason);
 
       const reworkType = reworkTypes?.find(
         (t) =>
-          t.reworkCode.toLowerCase() === codeOrReason.toLowerCase() ||
-          t.reason.toLowerCase() === codeOrReason.toLowerCase()
+          normCode(t.reworkCode) === normalizedCodeUpper ||
+          norm(t.reason) === normalizedCodeOrReason
       );
 
       const rejType = rejectionTypes?.find(
         (t) =>
-          t.rejectionCode.toLowerCase() === codeOrReason.toLowerCase() ||
-          t.reason.toLowerCase() === codeOrReason.toLowerCase()
+          normCode(t.rejectionCode) === normalizedCodeUpper ||
+          norm(t.reason) === normalizedCodeOrReason
       );
 
       if (!part || (!reworkType && !rejType)) {
@@ -881,7 +895,7 @@ export default function RecentEntries() {
       toast({
         title: "Import Failed",
         description:
-          "No entries could be imported. Check that part numbers and reason codes match exactly.",
+          "No entries could be imported. Make sure parts and rework/rejection codes exist in the system.",
         variant: "destructive",
       });
     }
@@ -933,20 +947,28 @@ export default function RecentEntries() {
         const quantity = parseInt(fuzzyFind(row, RE_QTY) || "1") || 1;
         const remarks = fuzzyFind(row, RE_REM);
 
+        const norm = (v: string | null | undefined) =>
+          (v ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+        const normCode = (v: string | null | undefined) =>
+          (v ?? "").toUpperCase().replace(/\s+/g, "").replace(/[\u2010-\u2014]/g, "-");
+
         const part = parts?.find(
-          (p) => p.partNumber.toLowerCase() === partNumber?.toLowerCase()
+          (p) => norm(p.partNumber) === norm(partNumber)
         );
+
+        const normalizedCodeOrReason = norm(codeOrReason);
+        const normalizedCodeUpper = normCode(codeOrReason);
 
         const reworkType = reworkTypes?.find(
           (t) =>
-            t.reworkCode.toLowerCase() === codeOrReason.toLowerCase() ||
-            t.reason.toLowerCase() === codeOrReason.toLowerCase()
+            normCode(t.reworkCode) === normalizedCodeUpper ||
+            norm(t.reason) === normalizedCodeOrReason
         );
 
         const rejType = rejectionTypes?.find(
           (t) =>
-            t.rejectionCode.toLowerCase() === codeOrReason.toLowerCase() ||
-            t.reason.toLowerCase() === codeOrReason.toLowerCase()
+            normCode(t.rejectionCode) === normalizedCodeUpper ||
+            norm(t.reason) === normalizedCodeOrReason
         );
 
         if (!part || (!reworkType && !rejType)) {
