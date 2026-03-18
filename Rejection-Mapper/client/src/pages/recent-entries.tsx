@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { format } from "date-fns";
 import { useRejectionEntries, useCreateRejectionEntry, useUpdateRejectionEntry, useBulkDeleteRejectionEntries } from "@/hooks/use-rejection-entries";
-import { useReworkEntries, useUpdateReworkEntry, useBulkDeleteReworkEntries } from "@/hooks/use-rework-entries";
+import { useReworkEntries, useCreateReworkEntry, useUpdateReworkEntry, useBulkDeleteReworkEntries } from "@/hooks/use-rework-entries";
 import { useParts } from "@/hooks/use-parts";
 import { useRejectionTypes } from "@/hooks/use-rejection-types";
 import { useReworkTypes } from "@/hooks/use-rework-types";
@@ -112,7 +112,7 @@ function resolveZone(val?: string | null): string {
 }
 
 function exportToCSV(entries: UnifiedEntry[], filename: string) {
-  const headers = ["Date", "Part Number", "Code", "Reason", "Purpose", "Zone", "Logged By", "Quantity", "Remarks"];
+  const headers = ["Date", "Part Number", "Code", "Purpose", "Zone", "Logged By", "Quantity", "Remarks"];
   const rows = entries.map((entry) => {
     if (entry.source === "rejection") {
       const e = entry.data;
@@ -120,7 +120,6 @@ function exportToCSV(entries: UnifiedEntry[], filename: string) {
         format(new Date(e.date), "yyyy-MM-dd HH:mm"),
         e.part.partNumber,
         e.rejectionType.rejectionCode,
-        e.rejectionType.reason,
         e.rejectionType.type,
         resolveZone(e.rejectionType.type),
         e.loggedByUsername || "",
@@ -133,7 +132,6 @@ function exportToCSV(entries: UnifiedEntry[], filename: string) {
         format(new Date(e.date), "yyyy-MM-dd HH:mm"),
         e.part.partNumber,
         e.reworkType.reworkCode,
-        e.reworkType.reason,
         "rework",
         resolveZone(e.reworkType.zone),
         e.loggedByUsername || "",
@@ -227,7 +225,6 @@ function EntriesTable({
               <TableHead>Part Number</TableHead>
               <TableHead>Type</TableHead>
               <TableHead>Code</TableHead>
-              <TableHead>Reason</TableHead>
               <TableHead>Purpose</TableHead>
               <TableHead>Zone</TableHead>
               <TableHead>Logged By</TableHead>
@@ -283,7 +280,6 @@ function EntriesTable({
                           {e.rejectionType.rejectionCode}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-sm font-medium">{e.rejectionType.reason}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className={isRework ? "bg-blue-500/10 text-blue-600 border-blue-400/30 capitalize" : "bg-destructive/10 text-destructive border-destructive/20 capitalize"}>
                           {e.rejectionType.type}
@@ -346,7 +342,6 @@ function EntriesTable({
                           {e.reworkType.reworkCode}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-sm font-medium">{e.reworkType.reason}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className="bg-blue-500/10 text-blue-600 border-blue-400/30">
                           Rework
@@ -398,6 +393,7 @@ function EntriesTable({
 }
 
 export default function RecentEntries() {
+  const ITEMS_PER_PAGE = 150;
   const [filters, setFilters] = useState<{ startDate?: string; endDate?: string }>({});
   const [activeTab, setActiveTab] = useState("all");
   const [isImporting, setIsImporting] = useState(false);
@@ -406,6 +402,8 @@ export default function RecentEntries() {
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [showBulkConfirm, setShowBulkConfirm] = useState(false);
   const [editingEntry, setEditingEntry] = useState<UnifiedEntry | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
@@ -415,7 +413,8 @@ export default function RecentEntries() {
   const { data: parts } = useParts();
   const { data: rejectionTypes } = useRejectionTypes();
   const { data: reworkTypes } = useReworkTypes();
-  const createMutation = useCreateRejectionEntry();
+  const createRejectionMutation = useCreateRejectionEntry();
+  const createReworkMutation = useCreateReworkEntry();
   const updateRejectionMutation = useUpdateRejectionEntry();
   const updateReworkMutation = useUpdateReworkEntry();
   const bulkDeleteRejectionMutation = useBulkDeleteRejectionEntries();
@@ -445,6 +444,49 @@ export default function RecentEntries() {
     activeTab === "rejection" ? rejectionOnlyEntries :
     activeTab === "rework" ? reworkOnlyEntries :
     allEntries;
+
+  // Filter entries by search term
+  const filteredEntries = searchTerm.trim() === "" ? currentEntries : currentEntries.filter((entry) => {
+    const searchLower = searchTerm.toLowerCase();
+    const dateStr = format(new Date(entry.data.date), "yyyy-MM-dd");
+    const timeStr = format(new Date(entry.data.date), "HH:mm");
+    const partNumber = entry.data.part.partNumber.toLowerCase();
+    const reason = entry.source === "rejection" 
+      ? entry.data.rejectionType.reason.toLowerCase()
+      : entry.data.reworkType.reason.toLowerCase();
+    const code = entry.source === "rejection"
+      ? entry.data.rejectionType.rejectionCode.toLowerCase()
+      : entry.data.reworkType.reworkCode.toLowerCase();
+    const zone = resolveZone(entry.source === "rejection" 
+      ? entry.data.rejectionType.type 
+      : entry.data.reworkType.zone).toLowerCase();
+    const loggedBy = (entry.data.loggedByUsername || "").toLowerCase();
+
+    return (
+      dateStr.includes(searchLower) ||
+      timeStr.includes(searchLower) ||
+      partNumber.includes(searchLower) ||
+      reason.includes(searchLower) ||
+      code.includes(searchLower) ||
+      zone.includes(searchLower) ||
+      loggedBy.includes(searchLower) ||
+      entry.data.remarks?.toLowerCase().includes(searchLower)
+    );
+  });
+
+  // Pagination calculations
+  const totalPages = Math.ceil(filteredEntries.length / ITEMS_PER_PAGE);
+  const validPage = Math.max(1, Math.min(currentPage, totalPages || 1));
+  const startIndex = (validPage - 1) * ITEMS_PER_PAGE;
+  const endIndex = startIndex + ITEMS_PER_PAGE;
+  const paginatedEntries = filteredEntries.slice(startIndex, endIndex);
+
+  // Reset to page 1 when tab changes
+  const handleTabChange = (tab: string) => {
+    setActiveTab(tab);
+    setSelectedKeys(new Set());
+    setCurrentPage(1);
+  };
 
   const someSelected = selectedKeys.size > 0;
 
@@ -497,7 +539,7 @@ export default function RecentEntries() {
   const handleExport = () => {
     const dateStr = format(new Date(), "yyyy-MM-dd");
     const tabLabel = activeTab === "rejection" ? "rejections" : activeTab === "rework" ? "reworks" : "all";
-    exportToCSV(currentEntries, `rejectmap-${tabLabel}-${dateStr}.csv`);
+    exportToCSV(filteredEntries, `rejectmap-${tabLabel}-${dateStr}.csv`);
   };
 
   const handleImportCSV = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -522,19 +564,39 @@ export default function RecentEntries() {
       const remarks = fuzzyFind(row, RE_REM);
 
       const part = parts?.find(p => p.partNumber.toLowerCase() === partNumber?.toLowerCase());
+      
+      // First try to find as rework type, then rejection type
+      const reworkType = reworkTypes?.find(
+        t => t.reworkCode.toLowerCase() === codeOrReason.toLowerCase() ||
+             t.reason.toLowerCase() === codeOrReason.toLowerCase()
+      );
       const rejType = rejectionTypes?.find(
         t => t.rejectionCode.toLowerCase() === codeOrReason.toLowerCase() ||
              t.reason.toLowerCase() === codeOrReason.toLowerCase()
       );
 
-      if (!part || !rejType) { failCount++; continue; }
+      if (!part || (!reworkType && !rejType)) { failCount++; continue; }
 
       try {
         await new Promise<void>((resolve, reject) => {
-          createMutation.mutate(
-            { partId: part.id, rejectionTypeId: rejType.id, quantity, remarks: remarks || undefined },
-            { onSuccess: () => resolve(), onError: reject }
-          );
+          if (reworkType) {
+            // Import as rework entry
+            createReworkMutation.mutate(
+              {
+                partId: part.id,
+                reworkTypeId: reworkType.id,
+                quantity,
+                remarks: remarks || undefined,
+              },
+              { onSuccess: () => resolve(), onError: reject }
+            );
+          } else if (rejType) {
+            // Import as rejection entry
+            createRejectionMutation.mutate(
+              { partId: part.id, rejectionTypeId: rejType.id, quantity, remarks: remarks || undefined },
+              { onSuccess: () => resolve(), onError: reject }
+            );
+          }
         });
         successCount++;
       } catch { failCount++; }
@@ -578,11 +640,16 @@ export default function RecentEntries() {
         const quantity = parseInt(fuzzyFind(row, RE_QTY) || "1") || 1;
         const remarks = fuzzyFind(row, RE_REM);
         const part = parts?.find(p => p.partNumber.toLowerCase() === partNumber?.toLowerCase());
+        const reworkType = reworkTypes?.find(t => t.reworkCode.toLowerCase() === codeOrReason.toLowerCase() || t.reason.toLowerCase() === codeOrReason.toLowerCase());
         const rejType = rejectionTypes?.find(t => t.rejectionCode.toLowerCase() === codeOrReason.toLowerCase() || t.reason.toLowerCase() === codeOrReason.toLowerCase());
-        if (!part || !rejType) { failCount++; continue; }
+        if (!part || (!reworkType && !rejType)) { failCount++; continue; }
         try {
           await new Promise<void>((resolve, reject) => {
-            createMutation.mutate({ partId: part.id, rejectionTypeId: rejType.id, quantity, remarks: remarks || undefined }, { onSuccess: () => resolve(), onError: reject });
+            if (reworkType) {
+              createReworkMutation.mutate({ partId: part.id, reworkTypeId: reworkType.id, quantity, remarks: remarks || undefined }, { onSuccess: () => resolve(), onError: reject });
+            } else if (rejType) {
+              createRejectionMutation.mutate({ partId: part.id, rejectionTypeId: rejType.id, quantity, remarks: remarks || undefined }, { onSuccess: () => resolve(), onError: reject });
+            }
           });
           successCount++;
         } catch { failCount++; }
@@ -660,7 +727,7 @@ export default function RecentEntries() {
             variant="outline"
             size="sm"
             onClick={handleExport}
-            disabled={currentEntries.length === 0}
+            disabled={filteredEntries.length === 0}
             className="h-9 gap-2"
             data-testid="button-export-csv"
           >
@@ -670,7 +737,7 @@ export default function RecentEntries() {
         </div>
       </div>
 
-      <Tabs defaultValue="all" onValueChange={(tab) => { setActiveTab(tab); setSelectedKeys(new Set()); }}>
+      <Tabs defaultValue="all" onValueChange={handleTabChange}>
         <TabsList>
           <TabsTrigger value="all" className="gap-2" data-testid="tab-all">
             <ListOrdered className="w-4 h-4" />
@@ -689,14 +756,35 @@ export default function RecentEntries() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="all" className="mt-4">
-          <EntriesTable entries={allEntries} isLoading={isLoading} isAdmin={isAdmin} selectedKeys={selectedKeys} onToggle={toggleSelect} onToggleAll={toggleSelectAll} onEdit={setEditingEntry} />
+        <div className="mt-4 mb-4">
+          <Input
+            placeholder="Search by date, time, part number, code, reason, zone, or remarks..."
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="w-full bg-background focus:ring-primary/20"
+            data-testid="input-search-entries"
+          />
+          {searchTerm && (
+            <p className="text-xs text-muted-foreground mt-2">
+              Found {filteredEntries.length} matching entr{filteredEntries.length !== 1 ? "ies" : "y"} ({totalPages > 1 ? `page ${validPage}/${totalPages}` : "1 page"})
+            </p>
+          )}
+        </div>
+
+        <TabsContent value="all" className="mt-4 space-y-4">
+          <EntriesTable entries={paginatedEntries} isLoading={isLoading} isAdmin={isAdmin} selectedKeys={selectedKeys} onToggle={toggleSelect} onToggleAll={toggleSelectAll} onEdit={setEditingEntry} />
+          {totalPages > 1 && <PaginationControls currentPage={validPage} totalPages={totalPages} onPageChange={setCurrentPage} />}
         </TabsContent>
-        <TabsContent value="rejection" className="mt-4">
-          <EntriesTable entries={rejectionOnlyEntries} isLoading={isLoading} isAdmin={isAdmin} selectedKeys={selectedKeys} onToggle={toggleSelect} onToggleAll={toggleSelectAll} onEdit={setEditingEntry} />
+        <TabsContent value="rejection" className="mt-4 space-y-4">
+          <EntriesTable entries={paginatedEntries} isLoading={isLoading} isAdmin={isAdmin} selectedKeys={selectedKeys} onToggle={toggleSelect} onToggleAll={toggleSelectAll} onEdit={setEditingEntry} />
+          {totalPages > 1 && <PaginationControls currentPage={validPage} totalPages={totalPages} onPageChange={setCurrentPage} />}
         </TabsContent>
-        <TabsContent value="rework" className="mt-4">
-          <EntriesTable entries={reworkOnlyEntries} isLoading={isLoading} isAdmin={isAdmin} selectedKeys={selectedKeys} onToggle={toggleSelect} onToggleAll={toggleSelectAll} onEdit={setEditingEntry} />
+        <TabsContent value="rework" className="mt-4 space-y-4">
+          <EntriesTable entries={paginatedEntries} isLoading={isLoading} isAdmin={isAdmin} selectedKeys={selectedKeys} onToggle={toggleSelect} onToggleAll={toggleSelectAll} onEdit={setEditingEntry} />
+          {totalPages > 1 && <PaginationControls currentPage={validPage} totalPages={totalPages} onPageChange={setCurrentPage} />}
         </TabsContent>
       </Tabs>
 
@@ -730,6 +818,74 @@ export default function RecentEntries() {
         updateRework={updateReworkMutation}
         toast={toast}
       />
+    </div>
+  );
+}
+
+function PaginationControls({
+  currentPage,
+  totalPages,
+  onPageChange,
+}: {
+  currentPage: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+}) {
+  return (
+    <div className="flex items-center justify-center gap-2 mt-4 p-4 bg-card border border-border/50 rounded-lg">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => onPageChange(currentPage - 1)}
+        disabled={currentPage === 1}
+        data-testid="button-prev-page"
+      >
+        Previous
+      </Button>
+
+      <div className="flex items-center gap-1">
+        {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+          let pageNum: number;
+          if (totalPages <= 7) {
+            pageNum = i + 1;
+          } else if (currentPage <= 4) {
+            pageNum = i + 1;
+          } else if (currentPage >= totalPages - 3) {
+            pageNum = totalPages - 6 + i;
+          } else {
+            pageNum = currentPage - 3 + i;
+          }
+
+          if (pageNum > totalPages) return null;
+
+          return (
+            <Button
+              key={pageNum}
+              variant={currentPage === pageNum ? "default" : "outline"}
+              size="sm"
+              onClick={() => onPageChange(pageNum)}
+              className="w-10"
+              data-testid={`button-page-${pageNum}`}
+            >
+              {pageNum}
+            </Button>
+          );
+        })}
+      </div>
+
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => onPageChange(currentPage + 1)}
+        disabled={currentPage === totalPages}
+        data-testid="button-next-page"
+      >
+        Next
+      </Button>
+
+      <span className="text-xs text-muted-foreground ml-2">
+        Page {currentPage} of {totalPages}
+      </span>
     </div>
   );
 }
