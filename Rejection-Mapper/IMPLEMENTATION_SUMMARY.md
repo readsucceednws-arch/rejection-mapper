@@ -44,6 +44,13 @@
    - ✅ Efficient database lookups with Maps
    - ✅ Transaction-safe operations
 
+### 7. **Cancellation Support**
+   - ✅ Import ID tracking for ongoing operations
+   - ✅ `/api/import-entries/:id/cancel` endpoint (POST)
+   - ✅ State management with auto-cleanup
+   - ✅ Graceful halt (current row completes)
+   - ✅ React hook integration with `cancelImport()` method
+
 ---
 
 ## 📋 Files Created/Modified
@@ -81,7 +88,9 @@ Complete usage guide with:
 ### **Modified Files**
 
 #### [server/routes.ts](../server/routes.ts)
-Added new endpoint: `POST /api/import-entries`
+Added new endpoints:
+- `POST /api/import-entries` - Import CSV/Excel data with robust handling
+- `POST /api/import-entries/:id/cancel` - Cancel ongoing imports
 
 ---
 
@@ -321,6 +330,44 @@ Please clarify if you'd like me to make any changes to the table structure.
 
 ---
 
+## � Cancellation Support
+
+For large imports, you can now stop the process while it's running:
+
+### Key Features
+- ✅ **Cancel Endpoint**: `POST /api/import-entries/:id/cancel`
+- ✅ **Import ID Tracking**: Response includes `importId` for reference
+- ✅ **Graceful Halt**: Current row completes, then import stops
+- ✅ **React Hook Support**: `cancelImport()` method in `useImportEntries`
+- ✅ **Detailed Response**: Shows rows imported before cancellation
+
+### How It Works
+
+```typescript
+const { importEntries, cancelImport, currentImportId } = useImportEntries();
+
+// Start a large import
+await importEntries(rows);
+
+// If you change your mind
+await cancelImport();
+
+// Import responds with:
+// {
+//   "success": false,
+//   "message": "Import cancelled at row 250. 250 of 1000 rows imported before cancellation.",
+//   "cancelled": true,
+//   "importId": "...",
+//   "summary": {...}
+// }
+```
+
+### See Also
+- **IMPORT_GUIDE.md** - Full cancellation documentation with examples
+- **API_DOCUMENTATION.md** - Cancel endpoint details and error scenarios
+
+---
+
 ## 🚀 Next Steps
 
 1. **Review the code** in `server/import-utils.ts` and `server/routes.ts`
@@ -329,7 +376,8 @@ Please clarify if you'd like me to make any changes to the table structure.
 4. **Try dry-run mode** to preview before importing
 5. **Integrate with your UI** using the provided React hook
 6. **Monitor the summary** for created entities and failures
-7. **Deploy to production** with confidence
+7. **Test cancellation** with large datasets to verify graceful halt
+8. **Deploy to production** with confidence
 
 ---
 
