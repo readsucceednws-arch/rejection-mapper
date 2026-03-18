@@ -229,25 +229,26 @@ export default function ManageRejectionTypes() {
               Delete Selected ({selectedIds.size})
             </Button>
           )}
-          <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-            <DialogTrigger asChild>
-              <Button className="shadow-md shadow-primary/20" data-testid="button-add-rejection-type">
-                <Plus className="w-4 h-4 mr-2" />Add Type
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-md">
-              <DialogHeader>
-                <DialogTitle>Add Rejection Type</DialogTitle>
-                <DialogDescription>Create a new type code for logging entries.</DialogDescription>
-              </DialogHeader>
-              <RejectionTypeForm
-                defaultValues={{ rejectionCode: "", reason: "", type: "" }}
-                onSubmit={handleCreate}
-                isPending={createMutation.isPending}
-                onCancel={() => setIsAddOpen(false)}
-                submitLabel="Add Type"
-                zones={zones ?? []}
-              />
+          {isAdmin && (
+            <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+              <DialogTrigger asChild>
+                <Button className="shadow-md shadow-primary/20" data-testid="button-add-rejection-type">
+                  <Plus className="w-4 h-4 mr-2" />Add Type
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Add Rejection Type</DialogTitle>
+                  <DialogDescription>Create a new type code for logging entries.</DialogDescription>
+                </DialogHeader>
+                <RejectionTypeForm
+                  defaultValues={{ rejectionCode: "", reason: "", type: "" }}
+                  onSubmit={handleCreate}
+                  isPending={createMutation.isPending}
+                  onCancel={() => setIsAddOpen(false)}
+                  submitLabel="Add Type"
+                  zones={zones ?? []}
+                />
             </DialogContent>
           </Dialog>
         </div>
@@ -316,12 +317,16 @@ export default function ManageRejectionTypes() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1 justify-end">
-                        <Button variant="ghost" size="sm" onClick={() => setEditType(t)} data-testid={`button-edit-rejection-type-${t.id}`}>
-                          <Pencil className="w-3.5 h-3.5" />
-                        </Button>
-                        <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteType(t)} data-testid={`button-delete-rejection-type-${t.id}`}>
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
+                        {isAdmin && (
+                          <>
+                            <Button variant="ghost" size="sm" onClick={() => setEditType(t)} data-testid={`button-edit-rejection-type-${t.id}`}>
+                              <Pencil className="w-3.5 h-3.5" />
+                            </Button>
+                            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteType(t)} data-testid={`button-delete-rejection-type-${t.id}`}>
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -341,7 +346,7 @@ export default function ManageRejectionTypes() {
       </Card>
 
       {/* Edit Dialog */}
-      <Dialog open={!!editType} onOpenChange={(o) => !o && setEditType(null)}>
+      <Dialog open={isAdmin && !!editType} onOpenChange={(o) => !o && setEditType(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Edit Rejection Type</DialogTitle>
