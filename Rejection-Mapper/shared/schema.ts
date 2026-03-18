@@ -242,6 +242,10 @@ export const insertRejectionEntrySchema = createInsertSchema(
   id: true,
   date: true,
   importedAt: true,
+}).extend({
+  // entryDate lets callers supply the entry date as an ISO/YYYY-MM-DD string.
+  // The server converts it to a Date and stores it in the `date` column.
+  entryDate: z.string().optional(),
 });
 
 export const insertReworkTypeSchema = createInsertSchema(reworkTypes).omit({
@@ -254,6 +258,10 @@ export const insertReworkEntrySchema = createInsertSchema(
   id: true,
   date: true,
   importedAt: true,
+}).extend({
+  // entryDate lets callers supply the entry date as an ISO/YYYY-MM-DD string.
+  // The server converts it to a Date and stores it in the `date` column.
+  entryDate: z.string().optional(),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({
