@@ -123,7 +123,7 @@ function exportToCSV(entries: UnifiedEntry[], filename: string) {
         e.rejectionType.reason,
         e.rejectionType.type,
         resolveZone(e.rejectionType.type),
-        "",
+        e.loggedByUsername || "",
         e.quantity,
         e.remarks || "",
       ];
@@ -136,7 +136,7 @@ function exportToCSV(entries: UnifiedEntry[], filename: string) {
         e.reworkType.reason,
         "rework",
         resolveZone(e.reworkType.zone),
-        "",
+        e.loggedByUsername || "",
         e.quantity,
         e.remarks || "",
       ];
@@ -293,7 +293,7 @@ function EntriesTable({
                         {resolveZone(e.rejectionType.type)}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        —
+                        {e.loggedByUsername || "—"}
                       </TableCell>
                       <TableCell className="text-right font-display font-bold text-lg">{e.quantity}</TableCell>
                       <TableCell className="text-sm text-muted-foreground truncate max-w-[260px]" title={e.remarks || ""}>
@@ -356,7 +356,7 @@ function EntriesTable({
                         {resolveZone(e.reworkType.zone)}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        —
+                        {e.loggedByUsername || "—"}
                       </TableCell>
                       <TableCell className="text-right font-display font-bold text-lg">{e.quantity}</TableCell>
                       <TableCell className="text-sm text-muted-foreground truncate max-w-[260px]" title={e.remarks || ""}>
