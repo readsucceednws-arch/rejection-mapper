@@ -711,11 +711,12 @@ export async function registerRoutes(
       const orgId = getOrgId(req);
       const user = req.user as User;
       const { insertReworkEntrySchema } = await import("@shared/schema");
+      // entryDate is now part of insertReworkEntrySchema (defined in shared/schema.ts)
+      // partId/reworkTypeId/quantity coercions still needed since they come from JSON
       const input = insertReworkEntrySchema.extend({
         partId: z.coerce.number(),
         reworkTypeId: z.coerce.number(),
         quantity: z.coerce.number().default(1),
-        entryDate: z.string().optional(),
       }).parse(req.body);
       const { entryDate, ...rest } = input;
       const entryDateObj = entryDate ? new Date(entryDate) : undefined;
