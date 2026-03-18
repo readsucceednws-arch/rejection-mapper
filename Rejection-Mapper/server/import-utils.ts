@@ -51,19 +51,72 @@ export function safeNumber(value: unknown): number | null {
 }
 
 /**
- * Safely parse a date
+ * Safely parse a date - handles multiple formats
+ * Supported: DD-MM-YYYY, YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, ISO 8601, etc.
  */
 export function safeDate(value: unknown): Date | null {
   const text = normalizeText(value);
   if (!text) return null;
   
+  // Try standard Date parsing first
   try {
     const date = new Date(text);
     if (!Number.isNaN(date.getTime())) {
       return date;
     }
   } catch {
-    // Fall through
+    // Fall through to custom parsing
+  }
+  
+  // Try parsing DD-MM-YYYY format (most common in manufacturing/Excel exports)
+  const ddmmyyyyMatch = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (ddmmyyyyMatch) {
+    const [, day, month, year] = ddmmyyyyMatch;
+    const d = parseInt(day, 10);
+    const m = parseInt(month, 10);
+    const y = parseInt(year, 10);
+    
+    // Validate month and day
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      const date = new Date(y, m - 1, d);
+      if (!Number.isNaN(date.getTime())) {
+        return date;
+      }
+    }
+  }
+  
+  // Try parsing YYYY-MM-DD format (ISO 8601)
+  const yyyymmddMatch = text.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
+  if (yyyymmddMatch) {
+    const [, year, month, day] = yyyymmddMatch;
+    const y = parseInt(year, 10);
+    const m = parseInt(month, 10);
+    const d = parseInt(day, 10);
+    
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      const date = new Date(y, m - 1, d);
+      if (!Number.isNaN(date.getTime())) {
+        return date;
+      }
+    }
+  }
+  
+  // Try parsing MM/DD/YYYY format (US format)
+  const mmddyyyyMatch = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (mmddyyyyMatch) {
+    const [, month, day, year] = mmddyyyyMatch;
+    const m = parseInt(month, 10);
+    const d = parseInt(day, 10);
+    const y = parseInt(year, 10);
+    
+    // Only parse if month is actually 1-12 (to distinguish from DD-MM-YYYY)
+    // If month > 12, we already tried it as DD-MM-YYYY above
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      const date = new Date(y, m - 1, d);
+      if (!Number.isNaN(date.getTime())) {
+        return date;
+      }
+    }
   }
   
   return null;
