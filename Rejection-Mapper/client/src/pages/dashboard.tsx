@@ -222,6 +222,14 @@ export default function Dashboard() {
   const [rejectionSearch, setRejectionSearch] = useState("");
   const [zoneTimePreset, setZoneTimePreset] = useState<ZoneTimePreset>("all");
   const [zoneChartMode, setZoneChartMode] = useState<ZoneChartMode>("both");
+  
+  // Part Wise Filters
+  const [partWiseTopN, setPartWiseTopN] = useState<number>(10);
+  const [partWiseSortOrder, setPartWiseSortOrder] = useState<"asc" | "desc">("desc");
+  
+  // Rejection Wise Filters
+  const [rejectionWiseTopN, setRejectionWiseTopN] = useState<number>(10);
+  const [rejectionWiseSortOrder, setRejectionWiseSortOrder] = useState<"asc" | "desc">("desc");
 
   const overviewFilters = useMemo(() => ({ ...globalDates }), [globalDates]);
   const partFilters = useMemo(() => ({ ...globalDates, ...partTabFilters }), [globalDates, partTabFilters]);
@@ -402,7 +410,7 @@ export default function Dashboard() {
   const rejectionWiseData = useMemo(() => {
     if (!summary) return [];
     const totalQty = summary.reduce((s, r) => s + r.totalQuantity, 0) || 1;
-    return summary.map((row) => {
+    const data = summary.map((row) => {
       const rt = rejectionTypes?.find((t) => t.id === row.rejectionTypeId);
       return {
         rejectionTypeId: row.rejectionTypeId,
@@ -413,21 +421,66 @@ export default function Dashboard() {
         pct: Math.round((row.totalQuantity / totalQty) * 100),
       };
     });
-  }, [summary, rejectionTypes]);
+    
+    // Sort the data
+    const sorted = [...data].sort((a, b) => {
+      if (rejectionWiseSortOrder === "desc") {
+        return b.totalQuantity - a.totalQuantity;
+      } else {
+        return a.totalQuantity - b.totalQuantity;
+      }
+    });
+    
+    return sorted;
+  }, [summary, rejectionTypes, rejectionWiseSortOrder]);
 
   const filteredRejectionWiseData = useMemo(() => {
-    if (!rejectionSearch.trim()) return rejectionWiseData;
-    const q = rejectionSearch.toLowerCase();
-    return rejectionWiseData.filter(
-      (r) => r.code.toLowerCase().includes(q) || r.reason.toLowerCase().includes(q)
-    );
-  }, [rejectionWiseData, rejectionSearch]);
+    let data = rejectionWiseData;
+    
+    // Apply search filter
+    if (rejectionSearch.trim()) {
+      const q = rejectionSearch.toLowerCase();
+      data = data.filter(
+        (r) => r.code.toLowerCase().includes(q) || r.reason.toLowerCase().includes(q)
+      );
+    }
+    
+    // Apply top N filter
+    if (rejectionWiseTopN > 0 && rejectionWiseTopN !== -1) {
+      data = data.slice(0, rejectionWiseTopN);
+    }
+    
+    return data;
+  }, [rejectionWiseData, rejectionSearch, rejectionWiseTopN]);
 
   const filteredPartData = useMemo(() => {
     if (!effectivePartData) return [];
-    if (selectedPartNumbers.length === 0) return effectivePartData;
-    return effectivePartData.filter((p) => selectedPartNumbers.includes(p.partNumber));
-  }, [effectivePartData, selectedPartNumbers]);
+    
+    let data = effectivePartData;
+    
+    // Apply part number filter
+    if (selectedPartNumbers.length > 0) {
+      data = data.filter((p) => selectedPartNumbers.includes(p.partNumber));
+    }
+    
+    // Sort the data
+    const sorted = [...data].sort((a, b) => {
+      const totalA = a.rejections + a.reworks;
+      const totalB = b.rejections + b.reworks;
+      if (partWiseSortOrder === "desc") {
+        return totalB - totalA;
+      } else {
+        return totalA - totalB;
+      }
+    });
+    
+    // Apply top N filter
+    if (partWiseTopN > 0 && partWiseTopN !== -1) {
+      return sorted.slice(0, partWiseTopN);
+    }
+    
+    return sorted;
+  }, [effectivePartData, selectedPartNumbers, partWiseTopN, partWiseSortOrder]);
 
   const normalizedCostData = useMemo(() => {
     if (!effectiveCostData) return [];
@@ -691,6 +744,41 @@ export default function Dashboard() {
               </div>
             }
           />
+          
+          {/* Part Wise Filters */}
+          <Card className="p-3 flex flex-wrap items-end gap-3 border-border/50 bg-card shadow-sm">
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-muted-foreground" />
+              <span className="text-xs font-medium text-muted-foreground">Display Options:</span>
+            </div>
+            <div className="grid gap-1">
+              <Label className="text-xs text-muted-foreground">Show Top</Label>
+              <Select value={partWiseTopN.toString()} onValueChange={(v) => setPartWiseTopN(parseInt(v))}>
+                <SelectTrigger className="h-8 text-xs w-[120px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="5">Top 5</SelectItem>
+                  <SelectItem value="10">Top 10</SelectItem>
+                  <SelectItem value="15">Top 15</SelectItem>
+                  <SelectItem value="20">Top 20</SelectItem>
+                  <SelectItem value="-1">All</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1">
+              <Label className="text-xs text-muted-foreground">Sort Order</Label>
+              <Select value={partWiseSortOrder} onValueChange={(v) => setPartWiseSortOrder(v as "asc" | "desc")}>
+                <SelectTrigger className="h-8 text-xs w-[140px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="desc">Highest First (↓)</SelectItem>
+                  <SelectItem value="asc">Lowest First (↑)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </Card>
 
           <Card className="shadow-sm border-border/50">
             <CardHeader>
@@ -767,8 +855,9 @@ export default function Dashboard() {
 
         {/* ── TAB 3: REJECTION WISE ── */}
         <TabsContent value="rejection" className="space-y-6">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Card className="p-3 flex flex-wrap items-end gap-3 border-border/50 bg-card shadow-sm">
+            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+              <Filter className="w-4 h-4 text-muted-foreground" />
               <input
                 type="text"
                 placeholder="Search by code or reason..."
@@ -777,13 +866,40 @@ export default function Dashboard() {
                 className="w-full h-8 pl-3 pr-3 text-xs rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/20"
                 data-testid="input-rejection-search"
               />
+              {rejectionSearch && (
+                <Button size="sm" variant="ghost" onClick={() => setRejectionSearch("")} className="h-8 text-xs text-muted-foreground">
+                  <X className="w-3 h-3" />
+                </Button>
+              )}
             </div>
-            {rejectionSearch && (
-              <Button size="sm" variant="ghost" onClick={() => setRejectionSearch("")} className="h-8 text-xs text-muted-foreground">
-                Clear
-              </Button>
-            )}
-          </div>
+            <div className="grid gap-1">
+              <Label className="text-xs text-muted-foreground">Show Top</Label>
+              <Select value={rejectionWiseTopN.toString()} onValueChange={(v) => setRejectionWiseTopN(parseInt(v))}>
+                <SelectTrigger className="h-8 text-xs w-[120px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="5">Top 5</SelectItem>
+                  <SelectItem value="10">Top 10</SelectItem>
+                  <SelectItem value="15">Top 15</SelectItem>
+                  <SelectItem value="20">Top 20</SelectItem>
+                  <SelectItem value="-1">All</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1">
+              <Label className="text-xs text-muted-foreground">Sort Order</Label>
+              <Select value={rejectionWiseSortOrder} onValueChange={(v) => setRejectionWiseSortOrder(v as "asc" | "desc")}>
+                <SelectTrigger className="h-8 text-xs w-[140px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="desc">Highest First (↓)</SelectItem>
+                  <SelectItem value="asc">Lowest First (↑)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </Card>
 
           <Card className="shadow-sm border-border/50">
             <CardHeader>
@@ -794,10 +910,10 @@ export default function Dashboard() {
               <div className="h-[380px] w-full">
                 {isLoadingSummary ? (
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
-                ) : rejectionWiseData.length > 0 ? (
+                ) : filteredRejectionWiseData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
-                      data={rejectionWiseData.slice(0, 15)}
+                      data={filteredRejectionWiseData}
                       layout="vertical"
                       margin={{ top: 5, right: 60, left: 10, bottom: 5 }}
                     >
@@ -821,7 +937,7 @@ export default function Dashboard() {
                         }}
                       />
                       <Bar dataKey="totalQuantity" name="Quantity" radius={[0, 4, 4, 0]}>
-                        {rejectionWiseData.slice(0, 15).map((_, index) => (
+                        {filteredRejectionWiseData.map((_, index) => (
                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                         ))}
                         <LabelList dataKey="totalQuantity" position="right" className="fill-muted-foreground" fontSize={10} />
@@ -829,7 +945,7 @@ export default function Dashboard() {
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
-                  <div className="h-full flex items-center justify-center text-muted-foreground">No data available</div>
+                  <div className="h-full flex items-center justify-center text-muted-foreground">No data available for selected filters</div>
                 )}
               </div>
             </CardContent>
