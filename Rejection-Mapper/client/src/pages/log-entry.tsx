@@ -472,19 +472,19 @@ export default function LogEntry() {
                     </div>
 
                     <div>
-                      <label className="text-xs font-medium text-muted-foreground">Rejection Code *</label>
+                      <label className="text-xs font-medium text-muted-foreground">Reason *</label>
                       {(() => {
                         const codeOptions =
                           newEntry.purpose === "rejection"
                             ? (rejectionTypes ?? []).map((t) => ({
                                 id: t.id,
                                 code: t.rejectionCode,
-                                reason: t.reason,
+                                zone: t.type,
                               }))
                             : (reworkTypes ?? []).map((t) => ({
                                 id: t.id,
                                 code: t.reworkCode,
-                                reason: t.reason,
+                                zone: t.zone,
                               }));
                         const selectedOption = codeOptions.find((o) => o.id === newEntry.rejectionTypeId);
                         return (
@@ -504,8 +504,8 @@ export default function LogEntry() {
                                 {selectedOption ? (
                                   <span>
                                     <span className="font-mono font-medium">{selectedOption.code}</span>
-                                    {selectedOption.reason && (
-                                      <span className="text-muted-foreground ml-1 truncate"> – {selectedOption.reason}</span>
+                                    {selectedOption.zone && (
+                                      <span className="text-muted-foreground ml-1 truncate"> – {selectedOption.zone}</span>
                                     )}
                                   </span>
                                 ) : (
@@ -523,7 +523,7 @@ export default function LogEntry() {
                                     {codeOptions.map((opt) => (
                                       <CommandItem
                                         key={opt.id}
-                                        value={`${opt.code} ${opt.reason ?? ""}`}
+                                        value={`${opt.code} ${opt.zone ?? ""}`}
                                         onSelect={() => {
                                           setNewEntry({ ...newEntry, rejectionTypeId: opt.id });
                                           setCodeOpen(false);
@@ -536,8 +536,8 @@ export default function LogEntry() {
                                           )}
                                         />
                                         <span className="font-mono font-medium">{opt.code}</span>
-                                        {opt.reason && (
-                                          <span className="text-muted-foreground ml-2 truncate">– {opt.reason}</span>
+                                        {opt.zone && (
+                                          <span className="text-muted-foreground ml-2 truncate">– {opt.zone}</span>
                                         )}
                                       </CommandItem>
                                     ))}
