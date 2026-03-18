@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useZones, useCreateZone, useUpdateZone, useDeleteZone, type Zone } from "@/hooks/use-zones";
 import { useToast } from "@/hooks/use-toast";
+import { useUser } from "@/hooks/use-auth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,9 +28,12 @@ import { MapPin, Plus, Pencil, Trash2 } from "lucide-react";
 export default function ManageZones() {
   const { toast } = useToast();
   const { data: zones, isLoading } = useZones();
+  const { data: currentUser } = useUser();
   const createMutation = useCreateZone();
   const updateMutation = useUpdateZone();
   const deleteMutation = useDeleteZone();
+
+  const isAdmin = currentUser?.role === "admin";
 
   const [newName, setNewName] = useState("");
   const [editZone, setEditZone] = useState<Zone | null>(null);
@@ -94,25 +98,31 @@ export default function ManageZones() {
           <CardDescription>Enter a zone name and click Add.</CardDescription>
         </CardHeader>
         <CardContent className="pt-6">
-          <div className="flex gap-3">
-            <Input
-              placeholder="e.g. Assembly Line A, Paint Shop, QC Bay 2"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleCreate(); } }}
-              className="flex-1 bg-background"
-              data-testid="input-zone-name"
-            />
-            <Button
-              onClick={handleCreate}
-              disabled={createMutation.isPending || !newName.trim()}
-              className="gap-2"
-              data-testid="button-add-zone"
-            >
-              <Plus className="w-4 h-4" />
-              {createMutation.isPending ? "Adding..." : "Add Zone"}
-            </Button>
-          </div>
+          {isAdmin ? (
+            <div className="flex gap-3">
+              <Input
+                placeholder="e.g. Assembly Line A, Paint Shop, QC Bay 2"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleCreate(); } }}
+                className="flex-1 bg-background"
+                data-testid="input-zone-name"
+              />
+              <Button
+                onClick={handleCreate}
+                disabled={createMutation.isPending || !newName.trim()}
+                className="gap-2"
+                data-testid="button-add-zone"
+              >
+                <Plus className="w-4 h-4" />
+                {createMutation.isPending ? "Adding..." : "Add Zone"}
+              </Button>
+            </div>
+          ) : (
+            <div className="py-4 text-sm text-muted-foreground">
+              Admin access required to add zones.
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -139,26 +149,28 @@ export default function ManageZones() {
                     <MapPin className="w-4 h-4 text-primary/60 shrink-0" />
                     <span className="font-medium text-sm">{zone.name}</span>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0"
-                      onClick={() => { setEditZone(zone); setEditName(zone.name); }}
-                      data-testid={`button-edit-zone-${zone.id}`}
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                      onClick={() => setDeleteZone(zone)}
-                      data-testid={`button-delete-zone-${zone.id}`}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </Button>
-                  </div>
+                  {isAdmin && (
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0"
+                        onClick={() => { setEditZone(zone); setEditName(zone.name); }}
+                        data-testid={`button-edit-zone-${zone.id}`}
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                        onClick={() => setDeleteZone(zone)}
+                        data-testid={`button-delete-zone-${zone.id}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -171,7 +183,7 @@ export default function ManageZones() {
         </CardContent>
       </Card>
 
-      <Dialog open={!!editZone} onOpenChange={(open) => { if (!open) setEditZone(null); }}>
+      <Dialog open={isAdmin && !!editZone} onOpenChange={(open) => { if (!open) setEditZone(null); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Rename Zone</DialogTitle>
