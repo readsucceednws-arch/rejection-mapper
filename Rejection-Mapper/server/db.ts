@@ -160,6 +160,7 @@ export async function initDb(): Promise<void> {
     ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "rejection_reason" text;
     ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "imported_at" timestamp;
     ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "zone_id" integer REFERENCES "zones"("id");
+    ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "logged_by_user_id" integer REFERENCES "users"("id");
     ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text;
 
       ALTER TABLE "rework_types" ADD COLUMN IF NOT EXISTS "zone" text;
@@ -169,6 +170,7 @@ export async function initDb(): Promise<void> {
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "process" text;
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "imported_at" timestamp;
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "zone_id" integer REFERENCES "zones"("id");
+    ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "logged_by_user_id" integer REFERENCES "users"("id");
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text;
 
     ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "role" text NOT NULL DEFAULT 'employee';
@@ -243,7 +245,9 @@ export async function initDb(): Promise<void> {
   // Run column additions individually so a failure in the block above
   // (or a previously-partial migration) cannot leave these columns missing.
   const columnMigrations = [
+    `ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "logged_by_user_id" integer REFERENCES "users"("id")`,
     `ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text`,
+    `ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "logged_by_user_id" integer REFERENCES "users"("id")`,
     `ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text`,
   ];
   for (const sql of columnMigrations) {
