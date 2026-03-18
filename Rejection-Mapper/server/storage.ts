@@ -144,6 +144,34 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  private async attachLoggedByUsername<T extends { loggedByUserId: number | null }>(
+    entries: T[]
+  ): Promise<Array<T & { loggedByUsername: string | null }>> {
+    const userIds = Array.from(
+      new Set(
+        entries
+          .map((entry) => entry.loggedByUserId)
+          .filter((id): id is number => typeof id === "number")
+      )
+    );
+
+    let usernameById = new Map<number, string | null>();
+    if (userIds.length > 0) {
+      const loggingUsers = await db
+        .select({ id: users.id, username: users.username })
+        .from(users)
+        .where(inArray(users.id, userIds));
+      usernameById = new Map(loggingUsers.map((user) => [user.id, user.username]));
+    }
+
+    return entries.map((entry) => ({
+      ...entry,
+      loggedByUsername: entry.loggedByUserId
+        ? (usernameById.get(entry.loggedByUserId) ?? null)
+        : null,
+    }));
+  }
+
   async createOrganization(name: string): Promise<Organization> {
     const inviteCode = generateInviteCode();
     const [created] = await db.insert(organizations).values({ name, inviteCode }).returning();
@@ -256,7 +284,7 @@ export class DatabaseStorage implements IStorage {
     if (filters?.type) {
       items = items.filter(item => item.rejectionType.type === filters.type);
     }
-    return items;
+    return this.attachLoggedByUsername(items);
   }
 
   async findDuplicateRejectionEntry(orgId: number, date: Date, partId: number, rejectionTypeId: number, quantity: number): Promise<boolean> {
@@ -287,7 +315,8 @@ export class DatabaseStorage implements IStorage {
       with: { part: true, rejectionType: true, zone: true },
     });
     if (!populated) throw new Error("Failed to retrieve created entry");
-    return populated;
+    const [withLogger] = await this.attachLoggedByUsername([populated]);
+    return withLogger;
   }
 
   async updateRejectionEntry(id: number, organizationId: number, data: { rejectionTypeId?: number; quantity?: number; remarks?: string | null }): Promise<RejectionEntryResponse> {
@@ -298,7 +327,8 @@ export class DatabaseStorage implements IStorage {
       with: { part: true, rejectionType: true, zone: true },
     });
     if (!populated) throw new Error("Failed to retrieve updated entry");
-    return populated;
+    const [withLogger] = await this.attachLoggedByUsername([populated]);
+    return withLogger;
   }
 
   async getReworkTypes(organizationId: number): Promise<ReworkType[]> {
@@ -345,12 +375,14 @@ export class DatabaseStorage implements IStorage {
     if (filters?.partId) conditions.push(eq(reworkEntries.partId, filters.partId));
     if (filters?.reworkTypeId) conditions.push(eq(reworkEntries.reworkTypeId, filters.reworkTypeId));
 
-    return await db.query.reworkEntries.findMany({
+    const items = await db.query.reworkEntries.findMany({
       where: and(...conditions),
       orderBy: [desc(reworkEntries.date)],
       with: { part: true, reworkType: true, zone: true },
       limit: 500,
     });
+
+    return this.attachLoggedByUsername(items);
   }
 
   async createReworkEntry(entry: InsertReworkEntry & { date?: Date }): Promise<ReworkEntryResponse> {
@@ -361,7 +393,8 @@ export class DatabaseStorage implements IStorage {
       with: { part: true, reworkType: true, zone: true },
     });
     if (!populated) throw new Error("Failed to retrieve created rework entry");
-    return populated;
+    const [withLogger] = await this.attachLoggedByUsername([populated]);
+    return withLogger;
   }
 
   async updateReworkEntry(id: number, organizationId: number, data: { reworkTypeId?: number; quantity?: number; remarks?: string | null }): Promise<ReworkEntryResponse> {
@@ -372,7 +405,8 @@ export class DatabaseStorage implements IStorage {
       with: { part: true, reworkType: true, zone: true },
     });
     if (!populated) throw new Error("Failed to retrieve updated rework entry");
-    return populated;
+    const [withLogger] = await this.attachLoggedByUsername([populated]);
+    return withLogger;
   }
 
   async bulkDeleteReworkEntries(ids: number[], organizationId: number): Promise<void> {
