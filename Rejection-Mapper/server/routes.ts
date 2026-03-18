@@ -1024,6 +1024,11 @@ export async function registerRoutes(
 
           // Parse date (default to now if missing)
           const entryDate = safeDate(dateStr) || new Date();
+          
+          // Log the date parsing for debugging
+          if (dateStr) {
+            logger.debug(`Row ${rowNum} date parsing: Raw value="${dateStr}" → Parsed date="${entryDate.toISOString().split('T')[0]}"`);
+          }
 
           // Determine entry type (rejection vs rework)
           const typeNorm = normalizeForMatching(typeField).toLowerCase();
