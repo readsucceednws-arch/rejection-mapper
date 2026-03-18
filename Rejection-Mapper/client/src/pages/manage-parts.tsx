@@ -183,26 +183,28 @@ export default function ManageParts() {
               Delete Selected ({selectedIds.size})
             </Button>
           )}
-          <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-            <DialogTrigger asChild>
-              <Button className="shadow-md shadow-primary/20" data-testid="button-add-part">
-                <Plus className="w-4 h-4 mr-2" />Add New Part
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-md">
-              <DialogHeader>
-                <DialogTitle>Add New Part</DialogTitle>
-                <DialogDescription>Create a new part number for the rejection logger.</DialogDescription>
-              </DialogHeader>
-              <PartForm
-                defaultValues={{ partNumber: "", price: 0 }}
-                onSubmit={handleCreate}
-                isPending={createMutation.isPending}
+          {isAdmin && (
+            <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+              <DialogTrigger asChild>
+                <Button className="shadow-md shadow-primary/20" data-testid="button-add-part">
+                  <Plus className="w-4 h-4 mr-2" />Add New Part
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Add New Part</DialogTitle>
+                  <DialogDescription>Create a new part number for the rejection logger.</DialogDescription>
+                </DialogHeader>
+                <PartForm
+                  defaultValues={{ partNumber: "", price: 0 }}
+                  onSubmit={handleCreate}
+                  isPending={createMutation.isPending}
                 onCancel={() => setIsAddOpen(false)}
                 submitLabel="Save Part"
               />
             </DialogContent>
           </Dialog>
+          )}
         </div>
       </div>
 
@@ -259,12 +261,16 @@ export default function ManageParts() {
                     <TableCell className="text-right font-medium">₹{Number(part.price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1 justify-end">
-                        <Button variant="ghost" size="sm" onClick={() => setEditPart(part)} data-testid={`button-edit-part-${part.id}`}>
-                          <Pencil className="w-3.5 h-3.5" />
-                        </Button>
-                        <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeletePart(part)} data-testid={`button-delete-part-${part.id}`}>
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
+                        {isAdmin && (
+                          <>
+                            <Button variant="ghost" size="sm" onClick={() => setEditPart(part)} data-testid={`button-edit-part-${part.id}`}>
+                              <Pencil className="w-3.5 h-3.5" />
+                            </Button>
+                            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeletePart(part)} data-testid={`button-delete-part-${part.id}`}>
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -284,7 +290,7 @@ export default function ManageParts() {
       </Card>
 
       {/* Edit Dialog */}
-      <Dialog open={!!editPart} onOpenChange={(o) => !o && setEditPart(null)}>
+      <Dialog open={isAdmin && !!editPart} onOpenChange={(o) => !o && setEditPart(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Edit Part</DialogTitle>
