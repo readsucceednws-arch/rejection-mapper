@@ -249,8 +249,9 @@ export default function ManageRejectionTypes() {
                   submitLabel="Add Type"
                   zones={zones ?? []}
                 />
-            </DialogContent>
-          </Dialog>
+              </DialogContent>
+            </Dialog>
+          )}
         </div>
       </div>
 
