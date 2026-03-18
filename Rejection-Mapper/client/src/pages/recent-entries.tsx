@@ -129,6 +129,17 @@ const RE_REM = new Set([
   "observations",
 ]);
 
+const RE_DATE = new Set([
+  "date",
+  "entrydate",
+  "logdate",
+  "transactiondate",
+  "dateofentry",
+  "dateofrejection",
+  "inspectiondate",
+  "entrydt",
+]);
+
 function fuzzyFind(row: Record<string, string>, set: Set<string>): string {
   for (const key of Object.keys(row)) {
     const s = slugify(key);
@@ -139,23 +150,40 @@ function fuzzyFind(row: Record<string, string>, set: Set<string>): string {
   return "";
 }
 
+// Safely convert an XLSX cell value to a plain string.
+// When cellDates:true is used, date cells become JS Date objects — toString()
+// on those gives a locale string like "Wed Apr 01 2026 00:00:00 GMT+0530".
+// Instead we format them as "YYYY-MM-DD" so the server receives a clean date.
+function xlsxCellToString(cell: any): string {
+  if (cell === undefined || cell === null) return "";
+  if (cell instanceof Date) {
+    const y = cell.getFullYear();
+    const m = String(cell.getMonth() + 1).padStart(2, "0");
+    const d = String(cell.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  return String(cell).trim();
+}
+
 async function parseFile(file: File): Promise<Record<string, string>[]> {
   const ext = file.name.split(".").pop()?.toLowerCase();
 
   if (ext === "xlsx" || ext === "xls" || ext === "xlsm") {
     const buffer = await file.arrayBuffer();
+    // cellDates:true → date cells become JS Date objects (avoids locale string issues)
+    // raw:true → keeps numbers as numbers; we stringify ourselves via xlsxCellToString
     const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json<string[]>(sheet, {
+    const rows = XLSX.utils.sheet_to_json<any[]>(sheet, {
       header: 1,
-      raw: false,
-      dateNF: "yyyy-mm-dd hh:mm",
+      raw: true,   // keep raw values so we control stringification
+      cellDates: true,
     });
 
     if (rows.length < 2) return [];
 
-    const headers = (rows[0] as string[])
-      .map((h) => String(h ?? "").toLowerCase().trim())
+    const headers = (rows[0] as any[])
+      .map((h) => xlsxCellToString(h).toLowerCase())
       .filter(Boolean);
 
     return (rows.slice(1) as any[][])
@@ -165,7 +193,7 @@ async function parseFile(file: File): Promise<Record<string, string>[]> {
       .map((row) => {
         const obj: Record<string, string> = {};
         headers.forEach((h, i) => {
-          obj[h] = row[i] !== undefined ? String(row[i]).trim() : "";
+          obj[h] = xlsxCellToString(row[i]);
         });
         return obj;
       });
@@ -818,6 +846,17 @@ export default function RecentEntries() {
       const codeOrReason = fuzzyFind(row, RE_CODE);
       const quantity = parseInt(fuzzyFind(row, RE_QTY) || "1") || 1;
       const remarks = fuzzyFind(row, RE_REM);
+      const rawDate = fuzzyFind(row, RE_DATE);
+      // Parse DD-MM-YYYY or YYYY-MM-DD into ISO date string for the server
+      const entryDate = (() => {
+        if (!rawDate) return undefined;
+        // DD-MM-YYYY or DD/MM/YYYY
+        const dmy = rawDate.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+        if (dmy) return `${dmy[3]}-${dmy[2].padStart(2,"0")}-${dmy[1].padStart(2,"0")}`;
+        // YYYY-MM-DD (already correct)
+        if (/^\d{4}-\d{2}-\d{2}/.test(rawDate)) return rawDate.slice(0,10);
+        return undefined;
+      })();
 
       // Normalize helper: lowercase, strip extra spaces and special chars for flexible matching
       const norm = (v: string | null | undefined) =>
@@ -858,6 +897,7 @@ export default function RecentEntries() {
                 reworkTypeId: reworkType.id,
                 quantity,
                 remarks: remarks || undefined,
+                entryDate: entryDate || undefined,
               },
               { onSuccess: () => resolve(), onError: reject }
             );
@@ -868,6 +908,7 @@ export default function RecentEntries() {
                 rejectionTypeId: rejType.id,
                 quantity,
                 remarks: remarks || undefined,
+                entryDate: entryDate || undefined,
               },
               { onSuccess: () => resolve(), onError: reject }
             );
