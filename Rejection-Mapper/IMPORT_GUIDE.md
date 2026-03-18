@@ -24,7 +24,7 @@ normalizeText(value)           // Trim whitespace
 normalizeForMatching(value)    // Case-insensitive, flexible matching
 normalizeCode(value)           // Uppercase codes, handle dashes
 safeNumber(value)              // Parse numbers safely
-safeDate(value)                // Parse dates safely
+safeDate(value)                // Parse dates (DD-MM-YYYY, YYYY-MM-DD, MM/DD/YYYY, etc.)
 flexibleMatch(a, b)            // Compare with flexible matching
 getRowCell(row, colName)       // Get value from row with flexible column matching
 ```
@@ -124,7 +124,7 @@ The endpoint automatically detects column names (case-insensitive):
 Automatically recognizes various column name variations:
 ```
 Part Number ≈ Part No ≈ PN ≈ part_number
-Rejection Code ≈ Code ≈ rejection_code
+Rejection Code ≈ Code ≈ rejection_code ≈ Reason (fallback)
 Date ≈ entry_date ≈ Entry Date
 ...
 ```
@@ -270,8 +270,11 @@ Row 25: Type field blank, assumes "rejection"
 
 ### Date Parsing
 ```
-Row 30: Date "invalid" → Uses current date
-→ Row processes successfully with current timestamp
+Row 30: Date "01-04-2025" (DD-MM-YYYY) → Parsed correctly
+Row 31: Date "2025-04-01" (YYYY-MM-DD) → Parsed correctly
+Row 32: Date "04/01/2025" (MM/DD/YYYY) → Parsed correctly
+Row 33: Date "invalid" → Falls back to current date
+→ All rows process successfully
 ```
 
 ---
@@ -313,6 +316,82 @@ console.log(`Failed: ${data.summary.failedRows.length} rows`);
 | Missing date | ✅ Uses current date |
 | Unknown part/code | ✅ Creates automatically |
 | Empty remarks | ✅ Stored as NULL |
+
+---
+
+## Cancelling Long-Running Imports
+
+For large imports (1000+ rows), you may want the ability to stop the process:
+
+### Step 1: Start an Import
+```bash
+curl -X POST http://localhost:3000/api/import-entries \
+  -H "Content-Type: application/json" \
+  -d '{"rows": [...]}'
+```
+
+Response includes `importId`:
+```json
+{
+  "success": true,
+  "message": "Imported 250 of 1000 rows",
+  "importId": "abc123def456...",
+  "summary": {...}
+}
+```
+
+### Step 2: Cancel While Running
+If import is still processing, call the cancel endpoint:
+```bash
+curl -X POST http://localhost:3000/api/import-entries/abc123def456.../cancel \
+  -H "Content-Type: application/json"
+```
+
+Response:
+```json
+{
+  "success": true,
+  "message": "Import cancellation requested. Current row processing will halt.",
+  "importId": "abc123def456..."
+}
+```
+
+### How It Works
+- Import will finish the **current row** it's processing
+- Then stop and return a summary showing:
+  - Rows imported before cancellation
+  - Entities created
+  - Cancellation flag
+- Example: `"Import cancelled at row 250. 250 of 1000 rows imported before cancellation."`
+
+### React Hook Usage
+```typescript
+import { useImportEntries } from '@/hooks/use-import-entries-bulk';
+
+function MyComponent() {
+  const { importEntries, cancelImport, currentImportId, isImporting } = useImportEntries();
+
+  const handleImport = async () => {
+    await importEntries(rows);
+  };
+
+  const handleCancel = async () => {
+    await cancelImport(); // Cancels current import
+  };
+
+  return (
+    <div>
+      <button onClick={handleImport} disabled={isImporting}>
+        Start Import
+      </button>
+      <button onClick={handleCancel} disabled={!isImporting || !currentImportId}>
+        Cancel Import
+      </button>
+      {currentImportId && <p>Import ID: {currentImportId}</p>}
+    </div>
+  );
+}
+```
 
 ---
 
