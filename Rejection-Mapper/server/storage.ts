@@ -144,32 +144,10 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
-  private async attachLoggedByUsername<T extends { loggedByUserId: number | null }>(
+  private attachLoggedByUsername<T extends { createdByUsername: string | null }>(
     entries: T[]
-  ): Promise<Array<T & { loggedByUsername: string | null }>> {
-    const userIds = Array.from(
-      new Set(
-        entries
-          .map((entry) => entry.loggedByUserId)
-          .filter((id): id is number => typeof id === "number")
-      )
-    );
-
-    let usernameById = new Map<number, string | null>();
-    if (userIds.length > 0) {
-      const loggingUsers = await db
-        .select({ id: users.id, username: users.username })
-        .from(users)
-        .where(inArray(users.id, userIds));
-      usernameById = new Map(loggingUsers.map((user) => [user.id, user.username]));
-    }
-
-    return entries.map((entry) => ({
-      ...entry,
-      loggedByUsername: entry.loggedByUserId
-        ? (usernameById.get(entry.loggedByUserId) ?? null)
-        : null,
-    }));
+  ): Array<T & { loggedByUsername: string | null }> {
+    return entries.map((entry) => ({ ...entry, loggedByUsername: entry.createdByUsername ?? null }));
   }
 
   async createOrganization(name: string): Promise<Organization> {
@@ -315,7 +293,7 @@ export class DatabaseStorage implements IStorage {
       with: { part: true, rejectionType: true, zone: true },
     });
     if (!populated) throw new Error("Failed to retrieve created entry");
-    const [withLogger] = await this.attachLoggedByUsername([populated]);
+    const [withLogger] = this.attachLoggedByUsername([populated]);
     return withLogger;
   }
 
@@ -327,7 +305,7 @@ export class DatabaseStorage implements IStorage {
       with: { part: true, rejectionType: true, zone: true },
     });
     if (!populated) throw new Error("Failed to retrieve updated entry");
-    const [withLogger] = await this.attachLoggedByUsername([populated]);
+    const [withLogger] = this.attachLoggedByUsername([populated]);
     return withLogger;
   }
 
@@ -393,7 +371,7 @@ export class DatabaseStorage implements IStorage {
       with: { part: true, reworkType: true, zone: true },
     });
     if (!populated) throw new Error("Failed to retrieve created rework entry");
-    const [withLogger] = await this.attachLoggedByUsername([populated]);
+    const [withLogger] = this.attachLoggedByUsername([populated]);
     return withLogger;
   }
 
@@ -405,7 +383,7 @@ export class DatabaseStorage implements IStorage {
       with: { part: true, reworkType: true, zone: true },
     });
     if (!populated) throw new Error("Failed to retrieve updated rework entry");
-    const [withLogger] = await this.attachLoggedByUsername([populated]);
+    const [withLogger] = this.attachLoggedByUsername([populated]);
     return withLogger;
   }
 
