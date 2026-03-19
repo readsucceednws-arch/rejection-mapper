@@ -307,7 +307,7 @@ export default function LogEntry() {
   const allValid = rows.every((r) => r.partId && r.typeId && parseInt(r.quantity) > 0);
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500 max-w-5xl">
+    <div className="space-y-6 animate-in fade-in duration-500 max-w-lg">
       <div>
         <h1 className="text-3xl font-display font-bold text-foreground">Log Entry</h1>
         <p className="text-muted-foreground mt-1 text-sm">Record rejection or rework entries for one or more parts</p>
@@ -331,21 +331,8 @@ export default function LogEntry() {
           </div>
         </CardHeader>
 
-        <CardContent className="space-y-3">
-          {/* Column headers — desktop only */}
-          <div
-            className="hidden md:grid gap-2 px-1 text-xs font-medium text-muted-foreground"
-            style={{ gridTemplateColumns: "1.2fr 0.9fr 1.2fr 64px 1fr 36px" }}
-          >
-            <span>Part</span>
-            <span>Purpose</span>
-            <span>Type / Code</span>
-            <span>Qty</span>
-            <span>Remarks</span>
-            <span />
-          </div>
-
-          {/* Entry rows */}
+        <CardContent className="space-y-4">
+          {/* Entry rows — portrait layout: each row is a stacked card */}
           {rows.map((row, idx) => {
             const typeOptions = row.purpose === "rework" ? reworkOptions : rejectionOptions;
             const typePlaceholder = row.purpose === "rework" ? "Search rework code…" : "Search rejection code…";
@@ -354,52 +341,82 @@ export default function LogEntry() {
             return (
               <div
                 key={row.id}
-                className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-3 md:space-y-0 md:grid md:gap-2 md:items-center"
-                style={{ gridTemplateColumns: "1.2fr 0.9fr 1.2fr 64px 1fr 36px" }}
+                className="rounded-lg border border-border/60 bg-muted/20 p-4 space-y-3"
               >
+                {/* Row header: number + remove button */}
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Entry {idx + 1}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    onClick={() => removeRow(row.id)}
+                    disabled={rows.length === 1}
+                    title="Remove entry"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+
                 {/* Part */}
-                <div className="space-y-1 md:space-y-0">
-                  <Label className="text-xs text-muted-foreground md:hidden">Part</Label>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">Part</Label>
                   <SearchableSelect
                     options={partOptions}
                     value={row.partId}
                     onValueChange={(v) => updateRow(row.id, { partId: v })}
-                    placeholder="Search part…"
+                    placeholder="Search part number…"
                     searchPlaceholder="Type to search parts…"
                     testId={`select-part-${idx}`}
                   />
                 </div>
 
-                {/* Purpose */}
-                <div className="space-y-1 md:space-y-0">
-                  <Label className="text-xs text-muted-foreground md:hidden">Purpose</Label>
-                  <Select
-                    value={row.purpose}
-                    onValueChange={(v) => updateRow(row.id, { purpose: v as EntryType })}
-                  >
-                    <SelectTrigger className="h-9 text-sm" data-testid={`select-purpose-${idx}`}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="rejection">
-                        <span className="flex items-center gap-2">
-                          <AlertTriangle className="w-3.5 h-3.5 text-destructive" />
-                          Rejection
-                        </span>
-                      </SelectItem>
-                      <SelectItem value="rework">
-                        <span className="flex items-center gap-2">
-                          <RefreshCw className="w-3.5 h-3.5 text-blue-500" />
-                          Rework
-                        </span>
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
+                {/* Purpose + Type side by side */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-sm font-medium">Purpose</Label>
+                    <Select
+                      value={row.purpose}
+                      onValueChange={(v) => updateRow(row.id, { purpose: v as EntryType })}
+                    >
+                      <SelectTrigger className="h-9 text-sm" data-testid={`select-purpose-${idx}`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="rejection">
+                          <span className="flex items-center gap-2">
+                            <AlertTriangle className="w-3.5 h-3.5 text-destructive" />
+                            Rejection
+                          </span>
+                        </SelectItem>
+                        <SelectItem value="rework">
+                          <span className="flex items-center gap-2">
+                            <RefreshCw className="w-3.5 h-3.5 text-blue-500" />
+                            Rework
+                          </span>
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-sm font-medium">Qty</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={row.quantity}
+                      onChange={(e) => updateRow(row.id, { quantity: e.target.value })}
+                      className="h-9 text-sm"
+                      data-testid={`input-quantity-${idx}`}
+                    />
+                  </div>
                 </div>
 
                 {/* Type / Code */}
-                <div className="space-y-1 md:space-y-0">
-                  <Label className="text-xs text-muted-foreground md:hidden">Type / Code</Label>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">Type / Code</Label>
                   <SearchableSelect
                     options={typeOptions}
                     value={row.typeId}
@@ -410,42 +427,19 @@ export default function LogEntry() {
                   />
                 </div>
 
-                {/* Quantity */}
-                <div className="space-y-1 md:space-y-0">
-                  <Label className="text-xs text-muted-foreground md:hidden">Qty</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    value={row.quantity}
-                    onChange={(e) => updateRow(row.id, { quantity: e.target.value })}
-                    className="h-9 text-sm"
-                    data-testid={`input-quantity-${idx}`}
-                  />
-                </div>
-
                 {/* Remarks */}
-                <div className="space-y-1 md:space-y-0">
-                  <Label className="text-xs text-muted-foreground md:hidden">Remarks</Label>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">
+                    Remarks <span className="text-muted-foreground font-normal">(optional)</span>
+                  </Label>
                   <Input
                     value={row.remarks}
                     onChange={(e) => updateRow(row.id, { remarks: e.target.value })}
-                    placeholder="Optional notes…"
+                    placeholder="Any additional notes…"
                     className="h-9 text-sm"
                     data-testid={`input-remarks-${idx}`}
                   />
                 </div>
-
-                {/* Remove */}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9 text-muted-foreground hover:text-destructive hover:bg-destructive/10 shrink-0 justify-self-end"
-                  onClick={() => removeRow(row.id)}
-                  disabled={rows.length === 1}
-                  title="Remove row"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
               </div>
             );
           })}
@@ -460,7 +454,7 @@ export default function LogEntry() {
               data-testid="button-add-row"
             >
               <Plus className="w-4 h-4" />
-              Add Row
+              Add Entry
             </Button>
 
             <Button
