@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { api } from "@shared/routes";
 import * as XLSX from "xlsx";
 import { format } from "date-fns";
@@ -651,6 +651,7 @@ export default function RecentEntries() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileInputKey, setFileInputKey] = useState(0); // increment to force-reset the file input
   const cancelImportRef = useRef(false); // set to true to stop the import loop mid-flight
+  const isMountedRef = useRef(true);    // set to false on unmount to guard all state setters
   const { toast } = useToast();
 
   const { data: currentUser } = useUser();
@@ -824,6 +825,16 @@ export default function RecentEntries() {
     exportToCSV(filteredEntries, `rejectmap-${tabLabel}-${dateStr}.csv`);
   };
 
+  // Flip isMountedRef on unmount so the import loops stop calling setState
+  // and calling toast after the user has navigated away.
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      cancelImportRef.current = true; // also stop the loop if mid-flight
+    };
+  }, []);
+
   // Always call this after any import attempt (success or failure) to ensure
   // the file input is fully reset and cannot re-fire onChange on re-render.
   const resetFileInput = () => {
@@ -860,15 +871,17 @@ export default function RecentEntries() {
     for (const row of rows) {
       // Check if user requested stop
       if (cancelImportRef.current) {
-        toast({
-          title: "Import Stopped",
-          description: `Stopped after ${successCount} imported, ${failCount} skipped.`,
-        });
-        setIsImporting(false);
-        resetFileInput();
-        cancelImportRef.current = false;
         await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
         await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+        if (isMountedRef.current) {
+          toast({
+            title: "Import Stopped",
+            description: `Stopped after ${successCount} imported, ${failCount} skipped.`,
+          });
+          setIsImporting(false);
+          resetFileInput();
+          cancelImportRef.current = false;
+        }
         return;
       }
 
@@ -950,11 +963,15 @@ export default function RecentEntries() {
       }
     }
 
-    setIsImporting(false);
-    resetFileInput();
-
+    // Always flush queries so data is saved even if user navigated away
     await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
     await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+
+    // Only update UI state if still mounted
+    if (!isMountedRef.current) return;
+
+    setIsImporting(false);
+    resetFileInput();
 
     if (successCount > 0) {
       toast({
@@ -1091,6 +1108,8 @@ export default function RecentEntries() {
       await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
       await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
 
+      if (!isMountedRef.current) return;
+
       setIsImporting(false);
 
       toast({
@@ -1107,7 +1126,9 @@ export default function RecentEntries() {
         variant: "destructive",
       });
     } finally {
-      setGsheetLoading(false);
+      if (isMountedRef.current) {
+        setGsheetLoading(false);
+      }
     }
   };
 
