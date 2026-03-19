@@ -1003,37 +1003,34 @@ export async function registerRoutes(
         const rowNum = rowIndex + 1;
 
         try {
-          // Extract fields with flexible column matching
-          const dateStr = normalizeText(
-            row.Date || row.date || row.DATE || 
-            row["Entry Date"] || row["entry_date"] || ""
-          );
-          const partNumber = normalizeText(
-            row["Part Number"] || row["part_number"] || row["Part No"] || 
-            row["PN"] || row.Part || row.Item || ""
-          );
-          const typeField = normalizeText(
-            row.Type || row.type || row.TYPE || 
-            row["Entry Type"] || row.Category || ""
-          );
-          const code = normalizeText(
-            row.Code || row.code || row.CODE || 
-            row["Rejection Code"] || row["Rework Code"] || 
-            row.Reason || row.reason || ""  // Also check Reason column as fallback
-          );
-          const purpose = normalizeText(
-            row.Purpose || row.purpose || 
-            row.Description || row.description || ""
-          );
-          const zone = normalizeText(
-            row.Zone || row.zone || row.ZONE || ""
-          );
-          const quantityStr = normalizeText(
-            row.Quantity || row.quantity || row.Qty || row.QTY || "1"
-          );
-          const remarks = normalizeText(
-            row.Remarks || row.remarks || row.Notes || row.notes || ""
-          );
+          // Extract fields — handles both original-case headers (from CSV text)
+          // and lowercase headers (from parseFile/XLSX which lowercases keys).
+          // Uses a helper that scans all keys case-insensitively.
+          const getField = (...candidates: string[]): string => {
+            for (const candidate of candidates) {
+              const lower = candidate.toLowerCase();
+              // Try exact match first
+              if (row[candidate] !== undefined && row[candidate] !== null && String(row[candidate]).trim()) {
+                return String(row[candidate]).trim();
+              }
+              // Try lowercase match
+              for (const key of Object.keys(row)) {
+                if (key.toLowerCase() === lower && row[key] !== undefined && row[key] !== null && String(row[key]).trim()) {
+                  return String(row[key]).trim();
+                }
+              }
+            }
+            return "";
+          };
+
+          const dateStr = normalizeText(getField("Date", "Entry Date", "entry_date", "LogDate", "Transaction Date"));
+          const partNumber = normalizeText(getField("Part Number", "part_number", "Part No", "PN", "Part", "Item", "Item Name", "Component"));
+          const typeField = normalizeText(getField("Type", "Entry Type", "Category", "Purpose", "purpose"));
+          const code = normalizeText(getField("Code", "Rejection Code", "Rework Code", "Reason", "RejectionCode", "ReworkCode", "ReasonCode"));
+          const purpose = normalizeText(getField("Purpose", "process", "Description", "description", "Operation"));
+          const zone = normalizeText(getField("Zone", "zone", "ZONE"));
+          const quantityStr = normalizeText(getField("Quantity", "quantity", "Qty", "QTY", "Count", "Pieces")) || "1";
+          const remarks = normalizeText(getField("Remarks", "remarks", "Notes", "notes", "Comment"));
 
           // Validate required fields
           if (isBlank(partNumber)) {
@@ -1065,8 +1062,14 @@ export async function registerRoutes(
           }
 
           // Determine entry type (rejection vs rework)
+          // Check Type field, Purpose field, and the Code itself
           const typeNorm = normalizeForMatching(typeField).toLowerCase();
-          const isRework = typeNorm.includes("rework") || typeNorm.includes("rw");
+          const codeNorm = normalizeForMatching(code).toLowerCase();
+          const purposeNorm = normalizeForMatching(purpose).toLowerCase();
+          const isRework = 
+            typeNorm.includes("rework") || typeNorm.includes("rw") ||
+            purposeNorm.includes("rework") || purposeNorm.includes("rw") ||
+            codeNorm.includes("rework");
 
           logger.debug(`Processing row ${rowNum}`, {
             partNumber,
@@ -1075,8 +1078,18 @@ export async function registerRoutes(
             quantity,
           });
 
-          // Get or create part
+          // Get or create part — try flexible match first, then exact, then loose
           let part = partMap.get(normalizeForMatching(partNumber));
+          if (!part) {
+            // Secondary: scan all parts for loose key match (handles parens, dashes, spaces)
+            const looseKey = partNumber.toLowerCase().replace(/[^a-z0-9]/g, "");
+            for (const [k, v] of partMap.entries()) {
+              if (k.replace(/[^a-z0-9]/g, "") === looseKey) {
+                part = v;
+                break;
+              }
+            }
+          }
           if (!part) {
             logger.info(`Creating new part: ${partNumber}`);
             if (!dryRun) {
@@ -1111,6 +1124,16 @@ export async function registerRoutes(
 
           if (isRework) {
             let reworkType = reworkCodeMap.get(normalizedCode);
+            if (!reworkType) {
+              // Try loose match — ignore dashes, spaces (e.g. "PLATING-REWORK" vs "PLATINGREWORK")
+              const looseCode = normalizedCode.replace(/[^A-Z0-9]/g, "");
+              for (const [k, v] of reworkCodeMap.entries()) {
+                if (k.replace(/[^A-Z0-9]/g, "") === looseCode) {
+                  reworkType = v;
+                  break;
+                }
+              }
+            }
             if (!reworkType) {
               logger.info(`Creating new rework type: ${normalizedCode}`);
               if (!dryRun) {
@@ -1182,6 +1205,16 @@ export async function registerRoutes(
           } else {
             // Rejection type
             let rejectionType = rejectionCodeMap.get(normalizedCode);
+            if (!rejectionType) {
+              // Try loose match
+              const looseCode = normalizedCode.replace(/[^A-Z0-9]/g, "");
+              for (const [k, v] of rejectionCodeMap.entries()) {
+                if (k.replace(/[^A-Z0-9]/g, "") === looseCode) {
+                  rejectionType = v;
+                  break;
+                }
+              }
+            }
             if (!rejectionType) {
               logger.info(`Creating new rejection type: ${normalizedCode}`);
               if (!dryRun) {
