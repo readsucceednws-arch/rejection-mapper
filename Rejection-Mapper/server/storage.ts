@@ -90,6 +90,7 @@ export interface IStorage {
   createRejectionEntry(entry: InsertRejectionEntry & { date?: Date }): Promise<RejectionEntryResponse>;
   updateRejectionEntry(id: number, organizationId: number, data: { rejectionTypeId?: number; quantity?: number; remarks?: string | null }): Promise<RejectionEntryResponse>;
   findDuplicateRejectionEntry(orgId: number, date: Date, partId: number, rejectionTypeId: number, quantity: number): Promise<boolean>;
+  findDuplicateReworkEntry(orgId: number, date: Date, partId: number, reworkTypeId: number, quantity: number): Promise<boolean>;
   bulkDeleteRejectionEntries(ids: number[], organizationId: number): Promise<void>;
 
   // Rework Types
@@ -275,6 +276,21 @@ export class DatabaseStorage implements IStorage {
         eq(rejectionEntries.quantity, quantity),
         gte(rejectionEntries.date, startOfDay),
         lte(rejectionEntries.date, endOfDay),
+      )).limit(1);
+    return rows.length > 0;
+  }
+
+  async findDuplicateReworkEntry(orgId: number, date: Date, partId: number, reworkTypeId: number, quantity: number): Promise<boolean> {
+    const startOfDay = new Date(date); startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay   = new Date(date); endOfDay.setHours(23, 59, 59, 999);
+    const rows = await db.select({ id: reworkEntries.id }).from(reworkEntries)
+      .where(and(
+        eq(reworkEntries.organizationId, orgId),
+        eq(reworkEntries.partId, partId),
+        eq(reworkEntries.reworkTypeId, reworkTypeId),
+        eq(reworkEntries.quantity, quantity),
+        gte(reworkEntries.date, startOfDay),
+        lte(reworkEntries.date, endOfDay),
       )).limit(1);
     return rows.length > 0;
   }
