@@ -917,6 +917,91 @@ export async function registerRoutes(
     }
   });
 
+  // --- DEDUPLICATE EXISTING ENTRIES ---
+  // Finds and removes duplicate entries (same org + part + type + quantity + calendar day)
+  // keeping the earliest (lowest id) of each group.
+  app.post("/api/dedup-entries", isAdmin, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { dryRun } = req.body as { dryRun?: boolean };
+
+      // Find duplicate rework entries — group by part, type, quantity, date-day
+      // Keep the MIN(id) in each group, delete the rest
+      const rwDupQuery = `
+        DELETE FROM rework_entries
+        WHERE organization_id = $1
+          AND id NOT IN (
+            SELECT MIN(id)
+            FROM rework_entries
+            WHERE organization_id = $1
+            GROUP BY part_id, rework_type_id, quantity, DATE(date)
+          )
+        RETURNING id
+      `;
+
+      const rejDupQuery = `
+        DELETE FROM rejection_entries
+        WHERE organization_id = $1
+          AND id NOT IN (
+            SELECT MIN(id)
+            FROM rejection_entries
+            WHERE organization_id = $1
+            GROUP BY part_id, rejection_type_id, quantity, DATE(date)
+          )
+        RETURNING id
+      `;
+
+      // Count query for dry run
+      const rwCountQuery = `
+        SELECT COUNT(*) as total,
+               COUNT(*) - COUNT(DISTINCT (part_id, rework_type_id, quantity, DATE(date))) as duplicates
+        FROM rework_entries WHERE organization_id = $1
+      `;
+      const rejCountQuery = `
+        SELECT COUNT(*) as total,
+               COUNT(*) - COUNT(DISTINCT (part_id, rejection_type_id, quantity, DATE(date))) as duplicates
+        FROM rejection_entries WHERE organization_id = $1
+      `;
+
+      const { pool } = await import("./db");
+
+      const rwCount = await pool.query(rwCountQuery, [orgId]);
+      const rejCount = await pool.query(rejCountQuery, [orgId]);
+
+      const rwDuplicates = parseInt(rwCount.rows[0].duplicates);
+      const rejDuplicates = parseInt(rejCount.rows[0].duplicates);
+      const totalDuplicates = rwDuplicates + rejDuplicates;
+
+      if (dryRun) {
+        return res.json({
+          dryRun: true,
+          reworkDuplicates: rwDuplicates,
+          rejectionDuplicates: rejDuplicates,
+          totalDuplicates,
+          message: `Found ${totalDuplicates} duplicate entries (${rwDuplicates} rework, ${rejDuplicates} rejection). Run without dryRun to delete them.`,
+        });
+      }
+
+      const rwResult = await pool.query(rwDupQuery, [orgId]);
+      const rejResult = await pool.query(rejDupQuery, [orgId]);
+
+      const rwDeleted = rwResult.rowCount ?? 0;
+      const rejDeleted = rejResult.rowCount ?? 0;
+      const totalDeleted = rwDeleted + rejDeleted;
+
+      res.json({
+        success: true,
+        reworkDeleted: rwDeleted,
+        rejectionDeleted: rejDeleted,
+        totalDeleted,
+        message: `Deleted ${totalDeleted} duplicate entries (${rwDeleted} rework, ${rejDeleted} rejection).`,
+      });
+    } catch (err: any) {
+      console.error("[dedup]", err);
+      res.status(500).json({ message: err.message || "Dedup failed" });
+    }
+  });
+
   // --- PROGRESS POLLING ENDPOINT ---
   app.get("/api/import-entries/:id/progress", isAuthenticated, (req, res) => {
     const importId = getParamString(req.params.id);
