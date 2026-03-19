@@ -640,6 +640,9 @@ export default function RecentEntries() {
   );
   const [activeTab, setActiveTab] = useState("all");
   const [isImporting, setIsImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{
+    processed: number; total: number; successful: number; failed: number; message: string;
+  } | null>(null);
   const [gsheetUrl, setGsheetUrl] = useState("");
   const [gsheetLoading, setGsheetLoading] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
@@ -840,6 +843,7 @@ export default function RecentEntries() {
   const resetFileInput = () => {
     if (fileInputRef.current) fileInputRef.current.value = "";
     setFileInputKey(k => k + 1);
+    setImportProgress(null);
   };
 
   const handleStopImport = () => {
@@ -850,34 +854,59 @@ export default function RecentEntries() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    cancelImportRef.current = false; // reset cancel flag for new import
+    cancelImportRef.current = false;
     resetFileInput();
 
     const rows = await parseFile(file);
     if (!rows.length) {
       resetFileInput();
-      toast({
-        title: "Import Failed",
-        description: "File is empty or has no valid data rows.",
-        variant: "destructive",
-      });
+      toast({ title: "Import Failed", description: "File is empty or has no valid data rows.", variant: "destructive" });
       return;
     }
 
     setIsImporting(true);
-    let successCount = 0;
-    let failCount = 0;
 
-    for (const row of rows) {
-      // Check if user requested stop
+    // ── 1. Fire the import on the server and get back an importId immediately ──
+    // The server processes everything in the background — tab switches, screen
+    // lock, and computer sleep will NOT interrupt it.
+    let importId: string;
+    try {
+      const startRes = await fetch("/api/import-entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ rows }),
+      });
+      if (!startRes.ok) {
+        const err = await startRes.json();
+        throw new Error(err.message || "Failed to start import");
+      }
+      const startData = await startRes.json();
+      importId = startData.importId;
+    } catch (err: any) {
+      if (isMountedRef.current) {
+        toast({ title: "Import Failed", description: err.message, variant: "destructive" });
+        setIsImporting(false);
+      }
+      resetFileInput();
+      return;
+    }
+
+    // ── 2. Poll for progress every 1.5 seconds ──────────────────────────────
+    // Polling continues even if the user switches tabs — the browser keeps
+    // running fetch() in the background. The import itself runs on the server.
+    const pollInterval = 1500;
+    const poll = async (): Promise<void> => {
+      // If the user clicked Stop Import, cancel on server and stop polling
       if (cancelImportRef.current) {
+        await fetch(`/api/import-entries/${importId}/cancel`, {
+          method: "POST",
+          credentials: "include",
+        }).catch(() => {});
         await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
         await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
         if (isMountedRef.current) {
-          toast({
-            title: "Import Stopped",
-            description: `Stopped after ${successCount} imported, ${failCount} skipped.`,
-          });
+          toast({ title: "Import Stopped", description: "Import cancelled on the server." });
           setIsImporting(false);
           resetFileInput();
           cancelImportRef.current = false;
@@ -885,112 +914,64 @@ export default function RecentEntries() {
         return;
       }
 
-      const partNumber = fuzzyFind(row, RE_PART);
-      const codeOrReason = fuzzyFind(row, RE_CODE);
-      const quantity = parseInt(fuzzyFind(row, RE_QTY) || "1") || 1;
-      const remarks = fuzzyFind(row, RE_REM);
-      const rawDate = fuzzyFind(row, RE_DATE);
-      // Parse DD-MM-YYYY or YYYY-MM-DD into ISO date string for the server
-      const entryDate = (() => {
-        if (!rawDate) return undefined;
-        // DD-MM-YYYY or DD/MM/YYYY
-        const dmy = rawDate.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
-        if (dmy) return `${dmy[3]}-${dmy[2].padStart(2,"0")}-${dmy[1].padStart(2,"0")}`;
-        // YYYY-MM-DD (already correct)
-        if (/^\d{4}-\d{2}-\d{2}/.test(rawDate)) return rawDate.slice(0,10);
-        return undefined;
-      })();
-
-      // Normalize helper: lowercase, strip extra spaces and special chars for flexible matching
-      const norm = (v: string | null | undefined) =>
-        (v ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-      const normCode = (v: string | null | undefined) =>
-        (v ?? "").toUpperCase().replace(/\s+/g, "").replace(/[\u2010-\u2014]/g, "-");
-
-      const part = parts?.find(
-        (p) => norm(p.partNumber) === norm(partNumber)
-      );
-
-      const normalizedCodeOrReason = norm(codeOrReason);
-      const normalizedCodeUpper = normCode(codeOrReason);
-
-      const reworkType = reworkTypes?.find(
-        (t) =>
-          normCode(t.reworkCode) === normalizedCodeUpper ||
-          norm(t.reason) === normalizedCodeOrReason
-      );
-
-      const rejType = rejectionTypes?.find(
-        (t) =>
-          normCode(t.rejectionCode) === normalizedCodeUpper ||
-          norm(t.reason) === normalizedCodeOrReason
-      );
-
-      if (!part || (!reworkType && !rejType)) {
-        failCount++;
-        continue;
-      }
-
       try {
-        await new Promise<void>((resolve, reject) => {
-          if (reworkType) {
-            createReworkMutation.mutate(
-              {
-                partId: part.id,
-                reworkTypeId: reworkType.id,
-                quantity,
-                remarks: remarks || undefined,
-                entryDate: entryDate || undefined,
-              },
-              { onSuccess: () => resolve(), onError: reject }
-            );
-          } else if (rejType) {
-            createRejectionMutation.mutate(
-              {
-                partId: part.id,
-                rejectionTypeId: rejType.id,
-                quantity,
-                remarks: remarks || undefined,
-                entryDate: entryDate || undefined,
-              },
-              { onSuccess: () => resolve(), onError: reject }
-            );
-          }
+        const res = await fetch(`/api/import-entries/${importId}/progress`, {
+          credentials: "include",
         });
-        successCount++;
+        if (!res.ok) throw new Error("Lost contact with import");
+        const progress = await res.json();
+
+        // Update progress display
+        if (isMountedRef.current) {
+          setImportProgress({
+            processed: progress.processedRows,
+            total: progress.totalRows,
+            successful: progress.successfulImports,
+            failed: progress.failedRows,
+            message: progress.message,
+          });
+        }
+
+        if (progress.status === "running" || progress.status === "pending") {
+          // Still going — poll again
+          setTimeout(poll, pollInterval);
+          return;
+        }
+
+        // ── 3. Import finished (done / cancelled / failed) ──────────────────
+        await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+        await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+
+        if (!isMountedRef.current) return;
+
+        setIsImporting(false);
+        setImportProgress(null);
+        resetFileInput();
+
+        if (progress.status === "done") {
+          const r = progress.result;
+          toast({
+            title: r?.summary?.successfulImports > 0 ? "Import Complete" : "Import Failed",
+            description: r?.message || progress.message,
+            variant: r?.summary?.successfulImports > 0 ? "default" : "destructive",
+          });
+        } else if (progress.status === "cancelled") {
+          toast({ title: "Import Stopped", description: progress.message });
+        } else {
+          toast({ title: "Import Failed", description: progress.message, variant: "destructive" });
+        }
+
       } catch {
-        failCount++;
+        // Network blip — keep polling, don't give up
+        setTimeout(poll, pollInterval * 2);
       }
-    }
+    };
 
-    // Always flush queries so data is saved even if user navigated away
-    await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
-    await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
-
-    // Only update UI state if still mounted
-    if (!isMountedRef.current) return;
-
-    setIsImporting(false);
-    resetFileInput();
-
-    if (successCount > 0) {
-      toast({
-        title: "Import Complete",
-        description: `${successCount} entries imported${
-          failCount > 0 ? `, ${failCount} skipped (unknown part/code)` : ""
-        }.`,
-      });
-    } else {
-      toast({
-        title: "Import Failed",
-        description:
-          "No entries could be imported. Make sure parts and rework/rejection codes exist in the system.",
-        variant: "destructive",
-      });
-    }
+    // Start polling
+    setTimeout(poll, pollInterval);
   };
 
-  const handleGSheetImport = async () => {
+    const handleGSheetImport = async () => {
     if (!gsheetUrl.trim()) return;
 
     cancelImportRef.current = false;
@@ -1213,16 +1194,26 @@ export default function RecentEntries() {
           />
 
           {isImporting ? (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={handleStopImport}
-              className="h-9 gap-2"
-              data-testid="button-stop-import"
-            >
-              <span className="w-3 h-3 rounded-sm bg-white inline-block" />
-              Stop Import
-            </Button>
+            <div className="flex items-center gap-2">
+              {importProgress && (
+                <div className="text-xs text-muted-foreground text-right">
+                  <div className="font-medium">
+                    {importProgress.processed}/{importProgress.total} rows
+                  </div>
+                  <div className="text-green-600">✓ {importProgress.successful} imported</div>
+                </div>
+              )}
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleStopImport}
+                className="h-9 gap-2"
+                data-testid="button-stop-import"
+              >
+                <span className="w-3 h-3 rounded-sm bg-white inline-block" />
+                Stop Import
+              </Button>
+            </div>
           ) : (
             <Button
               variant="outline"
