@@ -278,6 +278,25 @@ export async function initDb(): Promise<void> {
     WHERE "id" IN (
       SELECT MIN("id") FROM "users" WHERE "organization_id" IS NOT NULL GROUP BY "organization_id"
     ) AND "role" = 'employee';
+
+    -- Persists import resume checkpoints across server restarts.
+    -- fingerprint = stable hash of the file content (row count + sampled values).
+    -- Rows older than 48 hours are pruned on startup.
+    CREATE TABLE IF NOT EXISTS "import_checkpoints" (
+      "id"                  serial PRIMARY KEY,
+      "organization_id"     integer NOT NULL REFERENCES "organizations"("id") ON DELETE CASCADE,
+      "fingerprint"         text NOT NULL,
+      "resume_from_row"     integer NOT NULL,
+      "successful_imports"  integer NOT NULL DEFAULT 0,
+      "created_at"          timestamp NOT NULL DEFAULT now(),
+      UNIQUE ("organization_id", "fingerprint")
+    );
+    CREATE INDEX IF NOT EXISTS "IDX_import_checkpoints_org_fp"
+      ON "import_checkpoints" ("organization_id", "fingerprint");
+
+    -- Prune stale checkpoints (older than 48 hours) on every startup
+    DELETE FROM "import_checkpoints"
+    WHERE "created_at" < now() - interval '48 hours';
   `);
 
   // Run column additions individually so a failure in the block above
