@@ -70,6 +70,14 @@ export async function initDb(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
 
+    -- Composite index for fast duplicate detection on rejection entries
+    CREATE INDEX IF NOT EXISTS "IDX_rejection_entries_dup_check"
+      ON "rejection_entries" ("organization_id", "part_id", "rejection_type_id", "quantity", "date");
+
+    -- Composite index for fast duplicate detection on rework entries
+    CREATE INDEX IF NOT EXISTS "IDX_rework_entries_dup_check"
+      ON "rework_entries" ("organization_id", "part_id", "rework_type_id", "quantity", "date");
+
     -- Indexes for rejection_entries: speed up date-range filters, org scoping, and joins
     CREATE INDEX IF NOT EXISTS "IDX_rejection_entries_org_date"
       ON "rejection_entries" ("organization_id", "date" DESC);
