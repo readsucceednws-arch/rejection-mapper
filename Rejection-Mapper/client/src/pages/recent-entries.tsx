@@ -659,7 +659,8 @@ export default function RecentEntries() {
   const [fileInputKey, setFileInputKey] = useState(0); // increment to force-reset the file input
   const cancelImportRef = useRef(false); // set to true to stop the import loop mid-flight
   const isMountedRef = useRef(true);    // set to false on unmount to guard all state setters
-  const workerRef = useRef<Worker | null>(null); // Web Worker for background-safe polling
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null); // main-thread poller
+  const activeImportIdRef = useRef<string | null>(null); // importId being polled right now
   const { toast } = useToast();
 
   const { data: currentUser } = useUser();
@@ -890,12 +891,11 @@ export default function RecentEntries() {
     return () => {
       isMountedRef.current = false;
       cancelImportRef.current = true;
-      // Terminate the polling worker immediately on unmount
-      if (workerRef.current) {
-        workerRef.current.postMessage({ type: "STOP" });
-        workerRef.current.terminate();
-        workerRef.current = null;
+      if (pollIntervalRef.current !== null) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
       }
+      activeImportIdRef.current = null;
     };
   }, []);
 
@@ -964,94 +964,45 @@ export default function RecentEntries() {
       return;
     }
 
-    // ── 2. Spin up a Web Worker to poll progress ────────────────────────────
-    // Using an inline Blob URL worker instead of new URL(..., import.meta.url)
-    // because Vite does not always bundle the .ts worker file correctly when
-    // the tab is backgrounded or the user switches windows — the module load
-    // stalls and the poller silently dies.
-    // An inline blob worker has zero external dependencies and is immune to
-    // Vite's module resolution quirks.
+    // ── 2. Poll progress on the main thread ─────────────────────────────────
+    // The import runs entirely on the server — the browser just needs to check
+    // in periodically. A plain setInterval is simpler and more reliable than a
+    // Web Worker (no CSP blob: issues, no module bundling quirks).
+    //
+    // When the tab is backgrounded, browsers throttle timers to ~1 min — but
+    // that is fine because the server keeps going regardless. We hook into
+    // visibilitychange so we poll immediately when the user returns to the tab,
+    // catching up on any missed progress updates instantly.
     let pollCount = 0;
 
-    if (workerRef.current) {
-      workerRef.current.terminate();
-      workerRef.current = null;
+    // Stop any previous poll
+    if (pollIntervalRef.current !== null) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
     }
+    activeImportIdRef.current = importId;
 
-    const workerScript = `
-      let intervalId = null;
-      let currentImportId = null;
-      let pollInterval = 2500;
-      let consecutiveErrors = 0;
-      const MAX_ERRORS = 10;
-
-      function stopPolling() {
-        if (intervalId !== null) { clearInterval(intervalId); intervalId = null; }
-        currentImportId = null;
-        consecutiveErrors = 0;
+    const stopPolling = () => {
+      if (pollIntervalRef.current !== null) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
       }
+      activeImportIdRef.current = null;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
 
-      async function poll() {
-        if (!currentImportId) return;
-        try {
-          const res = await fetch('/api/import-entries/' + currentImportId + '/progress', {
-            credentials: 'include',
-          });
-          if (!res.ok) {
-            consecutiveErrors++;
-            if (consecutiveErrors >= MAX_ERRORS) {
-              stopPolling();
-              self.postMessage({ type: 'ERROR', message: 'Lost contact with server after multiple retries.' });
-            }
-            return;
-          }
-          consecutiveErrors = 0;
-          const data = await res.json();
-          if (data.status === 'running' || data.status === 'pending') {
-            self.postMessage({ type: 'PROGRESS', data });
-          } else {
-            stopPolling();
-            self.postMessage({ type: 'DONE', data });
-          }
-        } catch (e) {
-          consecutiveErrors++;
-          if (consecutiveErrors >= MAX_ERRORS) {
-            stopPolling();
-            self.postMessage({ type: 'ERROR', message: 'Network error — lost contact with server.' });
-          }
-        }
-      }
-
-      self.onmessage = function(e) {
-        const { type, importId, pollInterval: interval } = e.data;
-        if (type === 'START' && importId) {
-          stopPolling();
-          currentImportId = importId;
-          pollInterval = interval || 2500;
-          consecutiveErrors = 0;
-          poll();
-          intervalId = setInterval(poll, pollInterval);
-        } else if (type === 'STOP') {
-          stopPolling();
-        }
-      };
-    `;
-    const workerBlob = new Blob([workerScript], { type: 'application/javascript' });
-    const workerUrl = URL.createObjectURL(workerBlob);
-    const worker = new Worker(workerUrl);
-    URL.revokeObjectURL(workerUrl); // safe to revoke immediately after construction
-    workerRef.current = worker;
-
-    worker.onmessage = async (e: MessageEvent<{
-      type: "PROGRESS" | "DONE" | "ERROR";
-      data?: any;
-      message?: string;
-    }>) => {
-      const { type, data, message } = e.data;
-
-      if (type === "PROGRESS" && data) {
+    const handlePollResponse = async (data: {
+      importId: string;
+      status: string;
+      totalRows: number;
+      processedRows: number;
+      successfulImports: number;
+      failedRows: number;
+      message: string;
+      result?: Record<string, any>;
+    }) => {
+      if (data.status === "running" || data.status === "pending") {
         pollCount++;
-        // Update the progress counter in the UI
         if (isMountedRef.current) {
           setImportProgress({
             processed: data.processedRows,
@@ -1061,17 +1012,16 @@ export default function RecentEntries() {
             message: data.message,
           });
         }
-        // Refresh the entries table every 4th message (~10s) so rows appear live
+
+        // Refresh entries table every ~10 s so rows appear live
         if (pollCount % 4 === 0) {
           queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
           queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
         }
 
-        // Check if user clicked Stop Import — send cancel to server and stop worker
+        // User clicked Stop — cancel on server then clean up
         if (cancelImportRef.current) {
-          worker.postMessage({ type: "STOP" });
-          worker.terminate();
-          workerRef.current = null;
+          stopPolling();
           await fetch(`/api/import-entries/${importId}/cancel`, {
             method: "POST", credentials: "include",
           }).catch(() => {});
@@ -1088,51 +1038,55 @@ export default function RecentEntries() {
         return;
       }
 
-      // ── 3. Import finished (DONE / ERROR) ────────────────────────────────
-      worker.terminate();
-      workerRef.current = null;
-
+      // Import finished (done / failed / cancelled)
+      stopPolling();
       await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
       await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
-
       if (!isMountedRef.current) return;
-
       setIsImporting(false);
       setImportProgress(null);
       resetFileInput();
 
-      if (type === "ERROR") {
-        toast({ title: "Import Error", description: message || "Lost contact with server.", variant: "destructive" });
-        return;
-      }
-
-      if (data?.status === "done") {
+      if (data.status === "done") {
         const r = data.result;
         toast({
-          title: r?.summary?.successfulImports > 0 ? "Import Complete" : "Import Failed",
+          title: r?.summary?.successfulImports > 0 ? "Import Complete" : "Import Finished",
           description: r?.message || data.message,
           variant: r?.summary?.successfulImports > 0 ? "default" : "destructive",
         });
-      } else if (data?.status === "cancelled") {
+      } else if (data.status === "cancelled") {
         toast({ title: "Import Stopped", description: data.message });
       } else {
-        toast({ title: "Import Failed", description: data?.message || "Unknown error", variant: "destructive" });
+        toast({ title: "Import Failed", description: data.message || "Unknown error", variant: "destructive" });
       }
     };
 
-    worker.onerror = () => {
-      worker.terminate();
-      workerRef.current = null;
-      if (isMountedRef.current) {
-        toast({ title: "Import Error", description: "Worker failed unexpectedly.", variant: "destructive" });
-        setIsImporting(false);
-        setImportProgress(null);
-        resetFileInput();
+    const poll = async () => {
+      if (!activeImportIdRef.current) return;
+      try {
+        const res = await fetch(`/api/import-entries/${activeImportIdRef.current}/progress`, {
+          credentials: "include",
+        });
+        if (!res.ok) return; // silently retry next tick
+        const data = await res.json();
+        await handlePollResponse(data);
+      } catch {
+        // Network blip — silently retry
       }
     };
 
-    // Start the worker
-    worker.postMessage({ type: "START", importId, pollInterval: 2500 });
+    // Poll immediately, then every 2.5 s
+    poll();
+    pollIntervalRef.current = setInterval(poll, 2500);
+
+    // When the user comes back to this tab, poll immediately instead of waiting
+    // for the next interval tick (which may be up to 60s if throttled).
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible" && activeImportIdRef.current) {
+        poll();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
   };
 
     const handleGSheetImport = async () => {
