@@ -574,14 +574,14 @@ export default function Dashboard() {
 
             <Card className="hover-elevate border-amber-500/20 bg-gradient-to-br from-amber-500/5 to-transparent">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Cost of Poor Quality</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Rejection Cost</CardTitle>
                 <IndianRupee className="w-4 h-4 text-amber-600" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-display font-bold text-amber-600">
-                  {isLoadingCost && isLoadingDashboardEntries ? "..." : fmt(grandTotalCost)}
+                  {isLoadingCost && isLoadingDashboardEntries ? "..." : fmt(totalRejectionCost)}
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">Combined rejection + rework cost</p>
+                <p className="text-xs text-muted-foreground mt-1">Total cost of rejected parts</p>
               </CardContent>
             </Card>
           </div>
@@ -1089,19 +1089,6 @@ export default function Dashboard() {
               </CardContent>
             </Card>
 
-            <Card className="hover-elevate border-blue-500/20 bg-gradient-to-br from-blue-500/5 to-transparent">
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Rework Cost</CardTitle>
-                <IndianRupee className="w-4 h-4 text-blue-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-display font-bold text-blue-500">
-                  {isLoadingCost ? "..." : fmt(totalReworkCost)}
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">Total cost of reworked parts</p>
-              </CardContent>
-            </Card>
-
             <Card className="hover-elevate border-primary/20 bg-gradient-to-br from-primary/5 to-transparent">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Total Cost</CardTitle>
@@ -1119,7 +1106,7 @@ export default function Dashboard() {
           <Card className="shadow-sm border-border/50">
             <CardHeader>
               <CardTitle>Cost by Part</CardTitle>
-              <CardDescription>Stacked bars showing rejection cost (red) vs rework cost (blue) per part for current selection</CardDescription>
+              <CardDescription>Rejection cost per part for current selection</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="h-[420px] w-full">
@@ -1134,18 +1121,14 @@ export default function Dashboard() {
                       <Tooltip
                         cursor={{ fill: "hsl(var(--muted)/0.4)" }}
                         contentStyle={{ borderRadius: "8px", border: "1px solid hsl(var(--border))" }}
-                        formatter={(value: number, name) => [fmt(value), name === "rejectionCost" ? "Rejection Cost" : "Rework Cost"]}
+                        formatter={(value: number) => [fmt(value), "Rejection Cost"]}
                         labelFormatter={(label) => {
                           const part = filteredCostTableData.find((p) => p.partNumber === label);
                           return `${label}${part?.description ? ` — ${part.description}` : ""} (₹${part?.price}/unit)`;
                         }}
                       />
-                      <Legend formatter={(value) => <span className="text-xs">{value === "rejectionCost" ? "Rejection Cost" : "Rework Cost"}</span>} />
-                      <Bar dataKey="rejectionCost" name="rejectionCost" stackId="a" fill={REJECTION_COLOR}>
+                      <Bar dataKey="rejectionCost" name="rejectionCost" stackId="a" fill={REJECTION_COLOR} radius={[4, 4, 0, 0]}>
                         <LabelList dataKey="rejectionCost" position="top" className="fill-muted-foreground" fontSize={10} formatter={(v: number) => `₹${Math.round(Number(v) || 0)}`} />
-                      </Bar>
-                      <Bar dataKey="reworkCost" name="reworkCost" stackId="a" fill={REWORK_COLOR} radius={[4, 4, 0, 0]}>
-                        <LabelList dataKey="reworkCost" position="top" className="fill-muted-foreground" fontSize={10} formatter={(v: number) => `₹${Math.round(Number(v) || 0)}`} />
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
@@ -1187,8 +1170,6 @@ export default function Dashboard() {
                         <th className="text-right py-2 pr-4 font-medium text-muted-foreground">Price/Unit</th>
                         <th className="text-right py-2 pr-4 font-medium text-destructive">Rej Qty</th>
                         <th className="text-right py-2 pr-4 font-medium text-destructive">Rej Cost</th>
-                        <th className="text-right py-2 pr-4 font-medium text-blue-500">Rework Qty</th>
-                        <th className="text-right py-2 pr-4 font-medium text-blue-500">Rework Cost</th>
                         <th className="text-right py-2 font-bold">Total Cost</th>
                       </tr>
                     </thead>
@@ -1200,20 +1181,16 @@ export default function Dashboard() {
                           <td className="py-2 pr-4 text-right text-muted-foreground">{fmt(row.price)}</td>
                           <td className="py-2 pr-4 text-right text-destructive">{row.rejectionQty}</td>
                           <td className="py-2 pr-4 text-right text-destructive font-medium">{fmt(row.rejectionCost)}</td>
-                          <td className="py-2 pr-4 text-right text-blue-500">{row.reworkQty}</td>
-                          <td className="py-2 pr-4 text-right text-blue-500 font-medium">{fmt(row.reworkCost)}</td>
                           <td className="py-2 text-right font-bold">{fmt(row.totalCost)}</td>
                         </tr>
                       )) : (
                         <tr>
-                          <td colSpan={8} className="py-8 text-center text-muted-foreground">No data for selected part</td>
+                          <td colSpan={6} className="py-8 text-center text-muted-foreground">No data for selected part</td>
                         </tr>
                       )}
                       <tr className="border-t-2 border-border bg-muted/20">
-                        <td colSpan={4} className="py-2 pr-4 font-bold">Total</td>
+                        <td colSpan={3} className="py-2 pr-4 font-bold">Total</td>
                         <td className="py-2 pr-4 text-right text-destructive font-bold">{fmt(totalRejectionCost)}</td>
-                        <td className="py-2 pr-4"></td>
-                        <td className="py-2 pr-4 text-right text-blue-500 font-bold">{fmt(totalReworkCost)}</td>
                         <td className="py-2 text-right font-bold text-primary">{fmt(grandTotalCost)}</td>
                       </tr>
                     </tbody>
