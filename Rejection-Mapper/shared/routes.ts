@@ -8,6 +8,9 @@ import {
   rejectionTypes,
 } from './schema';
 
+// Opaque response types for populated relations
+const reworkEntryResponseSchema = z.custom<any>();
+
 export const errorSchemas = {
   validation: z.object({
     message: z.string(),
@@ -101,7 +104,7 @@ export const api = {
         reworkTypeId: z.coerce.number().optional(),
       }).optional(),
       responses: {
-        200: z.array(z.custom<any>()),
+        200: z.array(reworkEntryResponseSchema),
       },
     },
     create: {
@@ -114,7 +117,7 @@ export const api = {
         entryDate: z.string().optional(),
       }),
       responses: {
-        201: z.custom<any>(),
+        201: reworkEntryResponseSchema,
         400: z.object({ message: z.string(), field: z.string().optional() }),
       },
     },
