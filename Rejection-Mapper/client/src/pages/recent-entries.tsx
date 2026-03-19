@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { api } from "@shared/routes";
 import * as XLSX from "xlsx";
 import { format } from "date-fns";
 import {
@@ -922,8 +923,8 @@ export default function RecentEntries() {
 
     setIsImporting(false);
 
-    await queryClient.invalidateQueries({ queryKey: ["/api/rejection-entries"] });
-    await queryClient.invalidateQueries({ queryKey: ["/api/rework-entries"] });
+    await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+    await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
 
     if (successCount > 0) {
       toast({
@@ -1048,8 +1049,8 @@ export default function RecentEntries() {
         }
       }
 
-      await queryClient.invalidateQueries({ queryKey: ["/api/rejection-entries"] });
-      await queryClient.invalidateQueries({ queryKey: ["/api/rework-entries"] });
+      await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+      await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
 
       setIsImporting(false);
 
