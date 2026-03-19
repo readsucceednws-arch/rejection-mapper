@@ -35,6 +35,14 @@ interface ImportState {
   cancelled: boolean;
   startTime: number;
   orgId: number;
+  // Progress tracking — updated by the background job
+  status: "pending" | "running" | "done" | "failed" | "cancelled";
+  totalRows: number;
+  processedRows: number;
+  successfulImports: number;
+  failedRows: number;
+  message: string;
+  result?: Record<string, any>; // final result stored when done
 }
 
 const activeImports = new Map<string, ImportState>();
@@ -49,6 +57,12 @@ function createImportState(orgId: number): { id: string; state: ImportState } {
     cancelled: false,
     startTime: Date.now(),
     orgId,
+    status: "pending",
+    totalRows: 0,
+    processedRows: 0,
+    successfulImports: 0,
+    failedRows: 0,
+    message: "Starting...",
   };
   activeImports.set(id, state);
   
@@ -532,7 +546,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/rework-entries/bulk", isAdmin, async (req, res) => {
+  app.delete(`${api.reworkEntries.list.path}/bulk`, isAdmin, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const { ids } = z.object({ ids: z.array(z.number().int().positive()) }).parse(req.body);
@@ -603,7 +617,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/rework-entries/:id", isAuthenticated, async (req, res) => {
+  app.patch(`${api.reworkEntries.list.path}/:id`, isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const id = getParamId(req.params.id);
@@ -689,7 +703,7 @@ export async function registerRoutes(
   });
 
   // --- REWORK ENTRIES ---
-  app.get("/api/rework-entries", isAuthenticated, async (req, res) => {
+  app.get(api.reworkEntries.list.path, isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const params = req.query;
@@ -706,7 +720,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/rework-entries", isAuthenticated, async (req, res) => {
+  app.post(api.reworkEntries.create.path, isAuthenticated, async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const user = req.user as User;
@@ -883,7 +897,28 @@ export async function registerRoutes(
     }
   });
 
-  // --- ENTRIES IMPORT (Robust with fallback logic) ---
+  // --- PROGRESS POLLING ENDPOINT ---
+  app.get("/api/import-entries/:id/progress", isAuthenticated, (req, res) => {
+    const importId = getParamString(req.params.id);
+    const state = activeImports.get(importId);
+    if (!state) {
+      return res.status(404).json({ message: "Import not found or already completed" });
+    }
+    res.json({
+      importId,
+      status: state.status,
+      totalRows: state.totalRows,
+      processedRows: state.processedRows,
+      successfulImports: state.successfulImports,
+      failedRows: state.failedRows,
+      message: state.message,
+      ...(state.result ? { result: state.result } : {}),
+    });
+  });
+
+  // --- ENTRIES IMPORT (Fire-and-forget background job) ---
+  // The client gets back an importId immediately, then polls /api/import-entries/:id/progress.
+  // This means the import continues even if the client tab is switched or the screen locks.
   app.post("/api/import-entries", isAdmin, async (req, res, next) => {
     const { 
       ImportLogger, 
@@ -901,26 +936,28 @@ export async function registerRoutes(
       formatRowError 
     } = await import("./import-utils");
 
-    const logger = new ImportLogger();
-    const summary = createEmptySummary();
-    
-    // Create import state for potential cancellation
     const orgId = getOrgId(req);
     const { id: importId, state: importState } = createImportState(orgId);
 
+    const { rows, dryRun }: { rows: Record<string, any>[]; dryRun?: boolean } = req.body;
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      activeImports.delete(importId);
+      return res.status(400).json({ message: "No rows provided", importId });
+    }
+
+    // Respond immediately with the importId — client polls for progress
+    importState.totalRows = rows.length;
+    importState.status = "running";
+    importState.message = `Starting import of ${rows.length} rows...`;
+    res.status(202).json({ importId, totalRows: rows.length, message: "Import started" });
+
+    // --- BACKGROUND PROCESSING (runs after response is sent) ---
+    const logger = new ImportLogger();
+    const summary = createEmptySummary();
+    summary.totalRows = rows.length;
+
     try {
-      const { rows, dryRun }: { rows: Record<string, any>[]; dryRun?: boolean } = req.body;
-
-      if (!Array.isArray(rows) || rows.length === 0) {
-        activeImports.delete(importId);
-        return res.status(400).json({ 
-          message: "No rows provided", 
-          summary,
-          importId
-        });
-      }
-
-      summary.totalRows = rows.length;
       logger.info(`Starting import of ${rows.length} rows`, { dryRun: !!dryRun, importId });
 
       // Load existing data
@@ -955,15 +992,11 @@ export async function registerRoutes(
         // Check if import was cancelled
         if (importState.cancelled) {
           logger.warn(`Import cancelled by user at row ${rowIndex + 1}`);
+          importState.status = "cancelled";
+          importState.message = `Cancelled at row ${rowIndex + 1}. ${summary.successfulImports} of ${summary.totalRows} rows imported.`;
+          importState.result = { success: false, cancelled: true, summary, logs: logger.getLogs() };
           activeImports.delete(importId);
-          return res.json({
-            success: false,
-            message: `Import cancelled at row ${rowIndex + 1}. ${summary.successfulImports} of ${summary.totalRows} rows imported before cancellation.`,
-            summary,
-            importId,
-            cancelled: true,
-            logs: logger.getLogs(),
-          });
+          return;
         }
         
         const row = rows[rowIndex];
@@ -1220,9 +1253,14 @@ export async function registerRoutes(
           }
 
           summary.successfulImports++;
+          importState.processedRows = rowIndex + 1;
+          importState.successfulImports = summary.successfulImports;
+          importState.message = `Processing row ${rowIndex + 1} of ${rows.length}...`;
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
           addFailedRow(summary, rowNum, errorMsg);
+          importState.failedRows = summary.failedRows.length;
+          importState.processedRows = rowIndex + 1;
           logger.error(formatRowError(rowNum, "Exception during processing", errorMsg), { 
             error: err, 
             row 
@@ -1241,22 +1279,33 @@ export async function registerRoutes(
         });
       }
 
-      res.json({
+      const finalMsg = dryRun
+        ? `Dry run: Would import ${summary.successfulImports} of ${summary.totalRows} rows`
+        : `Imported ${summary.successfulImports} of ${summary.totalRows} rows`;
+
+      importState.status = "done";
+      importState.message = finalMsg;
+      importState.successfulImports = summary.successfulImports;
+      importState.failedRows = summary.failedRows.length;
+      importState.processedRows = summary.totalRows;
+      importState.result = {
         success: true,
-        message: dryRun 
-          ? `Dry run: Would import ${summary.successfulImports} of ${summary.totalRows} rows`
-          : `Imported ${summary.successfulImports} of ${summary.totalRows} rows`,
+        message: finalMsg,
         summary,
         logs: logger.getLogs(),
-      });
+      };
+      logger.info("Import complete", { successful: summary.successfulImports, failed: summary.failedRows.length });
+
     } catch (err) {
       logger.error("Import failed with fatal error", { error: err });
-      res.status(500).json({
+      importState.status = "failed";
+      importState.message = err instanceof Error ? err.message : "Import failed";
+      importState.result = {
         success: false,
-        message: err instanceof Error ? err.message : "Import failed",
+        message: importState.message,
         summary,
         logs: logger.getLogs(),
-      });
+      };
     }
   });
 
