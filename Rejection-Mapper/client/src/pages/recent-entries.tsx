@@ -655,7 +655,7 @@ export default function RecentEntries() {
   const [fileInputKey, setFileInputKey] = useState(0); // increment to force-reset the file input
   const cancelImportRef = useRef(false); // set to true to stop the import loop mid-flight
   const isMountedRef = useRef(true);    // set to false on unmount to guard all state setters
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null); // cleared on unmount
+  const workerRef = useRef<Worker | null>(null); // Web Worker for background-safe polling
   const { toast } = useToast();
 
   const { data: currentUser } = useUser();
@@ -835,10 +835,12 @@ export default function RecentEntries() {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
-      cancelImportRef.current = true; // signal poll loop to stop
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current); // clear the poll interval immediately
-        pollIntervalRef.current = null;
+      cancelImportRef.current = true;
+      // Terminate the polling worker immediately on unmount
+      if (workerRef.current) {
+        workerRef.current.postMessage({ type: "STOP" });
+        workerRef.current.terminate();
+        workerRef.current = null;
       }
     };
   }, []);
@@ -897,100 +899,115 @@ export default function RecentEntries() {
       return;
     }
 
-    // ── 2. Poll for progress using setInterval ──────────────────────────────
-    // setInterval is less throttled than setTimeout in background tabs.
-    // The import itself runs entirely on the server — tab switches don't affect it.
-    const pollInterval = 2500;
+    // ── 2. Spin up a Web Worker to poll progress ────────────────────────────
+    // Web Workers run in a separate thread that browsers do NOT throttle when
+    // the tab is backgrounded. The import itself runs on the server — the worker
+    // just checks in every 2.5s regardless of tab visibility.
     let pollCount = 0;
-    let intervalId: ReturnType<typeof setInterval>;
 
-    const stopPolling = () => {
-      clearInterval(intervalId);
-      pollIntervalRef.current = null;
-    };
+    // Terminate any previous worker
+    if (workerRef.current) {
+      workerRef.current.terminate();
+      workerRef.current = null;
+    }
 
-    const poll = async (): Promise<void> => {
-      pollCount++;
+    const worker = new Worker(
+      new URL("../workers/importPoller.worker.ts", import.meta.url),
+      { type: "module" }
+    );
+    workerRef.current = worker;
 
-      // If the user clicked Stop Import, cancel on server and stop polling
-      if (cancelImportRef.current) {
-        stopPolling();
-        await fetch(`/api/import-entries/${importId}/cancel`, {
-          method: "POST",
-          credentials: "include",
-        }).catch(() => {});
-        await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
-        await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+    worker.onmessage = async (e: MessageEvent<{
+      type: "PROGRESS" | "DONE" | "ERROR";
+      data?: any;
+      message?: string;
+    }>) => {
+      const { type, data, message } = e.data;
+
+      if (type === "PROGRESS" && data) {
+        pollCount++;
+        // Update the progress counter in the UI
         if (isMountedRef.current) {
-          toast({ title: "Import Stopped", description: "Import cancelled on the server." });
-          setIsImporting(false);
-          setImportProgress(null);
-          resetFileInput();
-          cancelImportRef.current = false;
+          setImportProgress({
+            processed: data.processedRows,
+            total: data.totalRows,
+            successful: data.successfulImports,
+            failed: data.failedRows,
+            message: data.message,
+          });
+        }
+        // Refresh the entries table every 4th message (~10s) so rows appear live
+        if (pollCount % 4 === 0) {
+          queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+          queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+        }
+
+        // Check if user clicked Stop Import — send cancel to server and stop worker
+        if (cancelImportRef.current) {
+          worker.postMessage({ type: "STOP" });
+          worker.terminate();
+          workerRef.current = null;
+          await fetch(`/api/import-entries/${importId}/cancel`, {
+            method: "POST", credentials: "include",
+          }).catch(() => {});
+          await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+          await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+          if (isMountedRef.current) {
+            toast({ title: "Import Stopped", description: "Import cancelled on the server." });
+            setIsImporting(false);
+            setImportProgress(null);
+            resetFileInput();
+            cancelImportRef.current = false;
+          }
         }
         return;
       }
 
-      try {
-        const res = await fetch(`/api/import-entries/${importId}/progress`, {
-          credentials: "include",
+      // ── 3. Import finished (DONE / ERROR) ────────────────────────────────
+      worker.terminate();
+      workerRef.current = null;
+
+      await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+      await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+
+      if (!isMountedRef.current) return;
+
+      setIsImporting(false);
+      setImportProgress(null);
+      resetFileInput();
+
+      if (type === "ERROR") {
+        toast({ title: "Import Error", description: message || "Lost contact with server.", variant: "destructive" });
+        return;
+      }
+
+      if (data?.status === "done") {
+        const r = data.result;
+        toast({
+          title: r?.summary?.successfulImports > 0 ? "Import Complete" : "Import Failed",
+          description: r?.message || data.message,
+          variant: r?.summary?.successfulImports > 0 ? "default" : "destructive",
         });
-        if (!res.ok) throw new Error("Lost contact with import");
-        const progress = await res.json();
-
-        // Update progress display (safe even in background tab)
-        if (isMountedRef.current) {
-          setImportProgress({
-            processed: progress.processedRows,
-            total: progress.totalRows,
-            successful: progress.successfulImports,
-            failed: progress.failedRows,
-            message: progress.message,
-          });
-        }
-
-        if (progress.status === "running" || progress.status === "pending") {
-          // Refresh table every 4th poll (~every 10s) so rows appear live
-          if (pollCount % 4 === 0) {
-            queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
-            queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
-          }
-          return; // interval will fire again
-        }
-
-        // ── 3. Import finished (done / cancelled / failed) ──────────────────
-        stopPolling();
-        await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
-        await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
-
-        if (!isMountedRef.current) return;
-
-        setIsImporting(false);
-        setImportProgress(null);
-        resetFileInput();
-
-        if (progress.status === "done") {
-          const r = progress.result;
-          toast({
-            title: r?.summary?.successfulImports > 0 ? "Import Complete" : "Import Failed",
-            description: r?.message || progress.message,
-            variant: r?.summary?.successfulImports > 0 ? "default" : "destructive",
-          });
-        } else if (progress.status === "cancelled") {
-          toast({ title: "Import Stopped", description: progress.message });
-        } else {
-          toast({ title: "Import Failed", description: progress.message, variant: "destructive" });
-        }
-
-      } catch {
-        // Network blip — silently skip this tick, interval will retry
+      } else if (data?.status === "cancelled") {
+        toast({ title: "Import Stopped", description: data.message });
+      } else {
+        toast({ title: "Import Failed", description: data?.message || "Unknown error", variant: "destructive" });
       }
     };
 
-    // Start polling immediately then every pollInterval
-    poll();
-    intervalId = setInterval(poll, pollInterval);
-    pollIntervalRef.current = intervalId; // store so useEffect cleanup can clear it
+    worker.onerror = () => {
+      worker.terminate();
+      workerRef.current = null;
+      if (isMountedRef.current) {
+        toast({ title: "Import Error", description: "Worker failed unexpectedly.", variant: "destructive" });
+        setIsImporting(false);
+        setImportProgress(null);
+        resetFileInput();
+      }
+    };
+
+    // Start the worker
+    worker.postMessage({ type: "START", importId, pollInterval: 2500 });
   };
 
     const handleGSheetImport = async () => {
