@@ -68,6 +68,7 @@ import {
   Upload,
   Trash2,
   Pencil,
+  Sparkles,
 } from "lucide-react";
 import type { RejectionEntryResponse, ReworkEntryResponse } from "@shared/schema";
 
@@ -640,6 +641,9 @@ export default function RecentEntries() {
   );
   const [activeTab, setActiveTab] = useState("all");
   const [isImporting, setIsImporting] = useState(false);
+  const [isDedupRunning, setIsDedupRunning] = useState(false);
+  const [dedupPreview, setDedupPreview] = useState<{ total: number; rework: number; rejection: number } | null>(null);
+  const [showDedupConfirm, setShowDedupConfirm] = useState(false);
   const [importProgress, setImportProgress] = useState<{
     processed: number; total: number; successful: number; failed: number; message: string;
   } | null>(null);
@@ -814,6 +818,56 @@ export default function RecentEntries() {
         variant: "destructive",
       });
       setShowBulkConfirm(false);
+    }
+  };
+
+  const handleDedup = async (confirm: boolean) => {
+    if (!confirm) {
+      // Dry run first — find out how many duplicates exist
+      setIsDedupRunning(true);
+      try {
+        const res = await fetch("/api/dedup-entries", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ dryRun: true }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message);
+        if (data.totalDuplicates === 0) {
+          toast({ title: "No duplicates found", description: "All entries are unique." });
+        } else {
+          setDedupPreview({ total: data.totalDuplicates, rework: data.reworkDuplicates, rejection: data.rejectionDuplicates });
+          setShowDedupConfirm(true);
+        }
+      } catch (err: any) {
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      } finally {
+        setIsDedupRunning(false);
+      }
+      return;
+    }
+
+    // Actual delete
+    setIsDedupRunning(true);
+    setShowDedupConfirm(false);
+    try {
+      const res = await fetch("/api/dedup-entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ dryRun: false }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message);
+      toast({ title: "Duplicates removed", description: data.message });
+      await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+      await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+      setDedupPreview(null);
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setIsDedupRunning(false);
     }
   };
 
@@ -1277,6 +1331,20 @@ export default function RecentEntries() {
             <Download className="w-4 h-4" />
             Export CSV
           </Button>
+
+          {isAdmin && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleDedup(false)}
+              disabled={isDedupRunning || isImporting}
+              className="h-9 gap-2 text-amber-600 border-amber-300 hover:bg-amber-50"
+              data-testid="button-dedup"
+            >
+              <Sparkles className="w-4 h-4" />
+              {isDedupRunning ? "Checking…" : "Remove Duplicates"}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -1391,6 +1459,30 @@ export default function RecentEntries() {
           )}
         </TabsContent>
       </Tabs>
+
+      <AlertDialog open={showDedupConfirm} onOpenChange={setShowDedupConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove Duplicate Entries?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Found <strong>{dedupPreview?.total ?? 0}</strong> duplicate entries
+              ({dedupPreview?.rework ?? 0} rework, {dedupPreview?.rejection ?? 0} rejection).
+              The earliest entry in each group will be kept, all others deleted.
+              This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDedupPreview(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => handleDedup(true)}
+              className="bg-amber-600 hover:bg-amber-700"
+              data-testid="button-confirm-dedup"
+            >
+              Delete {dedupPreview?.total ?? 0} Duplicates
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={showBulkConfirm} onOpenChange={setShowBulkConfirm}>
         <AlertDialogContent>
