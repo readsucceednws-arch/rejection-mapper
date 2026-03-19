@@ -965,21 +965,81 @@ export default function RecentEntries() {
     }
 
     // ── 2. Spin up a Web Worker to poll progress ────────────────────────────
-    // Web Workers run in a separate thread that browsers do NOT throttle when
-    // the tab is backgrounded. The import itself runs on the server — the worker
-    // just checks in every 2.5s regardless of tab visibility.
+    // Using an inline Blob URL worker instead of new URL(..., import.meta.url)
+    // because Vite does not always bundle the .ts worker file correctly when
+    // the tab is backgrounded or the user switches windows — the module load
+    // stalls and the poller silently dies.
+    // An inline blob worker has zero external dependencies and is immune to
+    // Vite's module resolution quirks.
     let pollCount = 0;
 
-    // Terminate any previous worker
     if (workerRef.current) {
       workerRef.current.terminate();
       workerRef.current = null;
     }
 
-    const worker = new Worker(
-      new URL("../workers/importPoller.worker.ts", import.meta.url),
-      { type: "module" }
-    );
+    const workerScript = `
+      let intervalId = null;
+      let currentImportId = null;
+      let pollInterval = 2500;
+      let consecutiveErrors = 0;
+      const MAX_ERRORS = 10;
+
+      function stopPolling() {
+        if (intervalId !== null) { clearInterval(intervalId); intervalId = null; }
+        currentImportId = null;
+        consecutiveErrors = 0;
+      }
+
+      async function poll() {
+        if (!currentImportId) return;
+        try {
+          const res = await fetch('/api/import-entries/' + currentImportId + '/progress', {
+            credentials: 'include',
+          });
+          if (!res.ok) {
+            consecutiveErrors++;
+            if (consecutiveErrors >= MAX_ERRORS) {
+              stopPolling();
+              self.postMessage({ type: 'ERROR', message: 'Lost contact with server after multiple retries.' });
+            }
+            return;
+          }
+          consecutiveErrors = 0;
+          const data = await res.json();
+          if (data.status === 'running' || data.status === 'pending') {
+            self.postMessage({ type: 'PROGRESS', data });
+          } else {
+            stopPolling();
+            self.postMessage({ type: 'DONE', data });
+          }
+        } catch (e) {
+          consecutiveErrors++;
+          if (consecutiveErrors >= MAX_ERRORS) {
+            stopPolling();
+            self.postMessage({ type: 'ERROR', message: 'Network error — lost contact with server.' });
+          }
+        }
+      }
+
+      self.onmessage = function(e) {
+        const { type, importId, pollInterval: interval } = e.data;
+        if (type === 'START' && importId) {
+          stopPolling();
+          currentImportId = importId;
+          pollInterval = interval || 2500;
+          consecutiveErrors = 0;
+          poll();
+          intervalId = setInterval(poll, pollInterval);
+        } else if (type === 'STOP') {
+          stopPolling();
+        }
+      };
+    `;
+    const workerBlob = new Blob([workerScript], { type: 'application/javascript' });
+    const workerUrl = URL.createObjectURL(workerBlob);
+    const worker = new Worker(workerUrl);
+    URL.revokeObjectURL(workerUrl); // safe to revoke immediately after construction
     workerRef.current = worker;
 
     worker.onmessage = async (e: MessageEvent<{
