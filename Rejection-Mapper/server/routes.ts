@@ -590,6 +590,16 @@ export async function registerRoutes(
         createdByUsername: user.username ?? user.email ?? null,
         ...(entryDateObj ? { date: entryDateObj } : {}),
       };
+
+      // Duplicate check: same part + type + quantity on the same day
+      const rejDate = entryDateObj ?? new Date();
+      const isDuplicate = await storage.findDuplicateRejectionEntry(
+        orgId, rejDate, rest.partId, rest.rejectionTypeId, rest.quantity ?? 1
+      );
+      if (isDuplicate) {
+        return res.status(409).json({ message: "Duplicate entry: this part, type, and quantity were already logged for this date." });
+      }
+
       const created = await storage.createRejectionEntry(entryPayload as any);
       res.status(201).json(created);
     } catch (err) {
@@ -734,6 +744,16 @@ export async function registerRoutes(
       }).parse(req.body);
       const { entryDate, ...rest } = input;
       const entryDateObj = entryDate ? new Date(entryDate) : undefined;
+
+      // Duplicate check: same part + type + quantity on the same day
+      const rwDate = entryDateObj ?? new Date();
+      const isRwDuplicate = await storage.findDuplicateReworkEntry(
+        orgId, rwDate, rest.partId, rest.reworkTypeId, rest.quantity ?? 1
+      );
+      if (isRwDuplicate) {
+        return res.status(409).json({ message: "Duplicate entry: this part, type, and quantity were already logged for this date." });
+      }
+
       const created = await storage.createReworkEntry({
         ...rest,
         organizationId: orgId,
@@ -1187,8 +1207,15 @@ export async function registerRoutes(
               zoneId = zoneObj?.id || null;
             }
 
-            // Create rework entry
+            // Create rework entry (skip if duplicate)
             if (!dryRun) {
+              const isRwDup = await storage.findDuplicateReworkEntry(orgId, entryDate, part.id, reworkType.id, quantity);
+              if (isRwDup) {
+                addFailedRow(summary, rowNum, `Duplicate: ${part.partNumber} / ${reworkType.reworkCode} / qty ${quantity} already exists for this date`);
+                importState.failedRows = summary.failedRows.length;
+                importState.processedRows = rowIndex + 1;
+                continue;
+              }
               await storage.createReworkEntry({
                 partId: part.id,
                 reworkTypeId: reworkType.id,
@@ -1268,8 +1295,15 @@ export async function registerRoutes(
               zoneId = zoneObj?.id || null;
             }
 
-            // Create rejection entry
+            // Create rejection entry (skip if duplicate)
             if (!dryRun) {
+              const isRejDup = await storage.findDuplicateRejectionEntry(orgId, entryDate, part.id, rejectionType.id, quantity);
+              if (isRejDup) {
+                addFailedRow(summary, rowNum, `Duplicate: ${part.partNumber} / ${rejectionType.rejectionCode} / qty ${quantity} already exists for this date`);
+                importState.failedRows = summary.failedRows.length;
+                importState.processedRows = rowIndex + 1;
+                continue;
+              }
               await storage.createRejectionEntry({
                 partId: part.id,
                 rejectionTypeId: rejectionType.id,
