@@ -122,6 +122,20 @@ export const api = {
       },
     },
   },
+  importEntries: {
+    start: {
+      method: 'POST' as const,
+      path: '/api/import-entries' as const,
+    },
+    progress: {
+      method: 'GET' as const,
+      path: '/api/import-entries' as const, // used as /api/import-entries/:id/progress
+    },
+    cancel: {
+      method: 'POST' as const,
+      path: '/api/import-entries' as const, // used as /api/import-entries/:id/cancel
+    },
+  },
   reports: {
     summary: {
       method: 'GET' as const,
