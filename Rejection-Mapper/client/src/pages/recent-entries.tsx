@@ -649,6 +649,7 @@ export default function RecentEntries() {
   const [currentPage, setCurrentPage] = useState(1);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [fileInputKey, setFileInputKey] = useState(0); // increment to force-reset the file input
   const { toast } = useToast();
 
   const { data: currentUser } = useUser();
@@ -822,14 +823,22 @@ export default function RecentEntries() {
     exportToCSV(filteredEntries, `rejectmap-${tabLabel}-${dateStr}.csv`);
   };
 
+  // Always call this after any import attempt (success or failure) to ensure
+  // the file input is fully reset and cannot re-fire onChange on re-render.
+  const resetFileInput = () => {
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setFileInputKey(k => k + 1);
+  };
+
   const handleImportCSV = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (fileInputRef.current) fileInputRef.current.value = "";
+    resetFileInput();
 
     const rows = await parseFile(file);
     if (!rows.length) {
+      resetFileInput();
       toast({
         title: "Import Failed",
         description: "File is empty or has no valid data rows.",
@@ -922,6 +931,7 @@ export default function RecentEntries() {
     }
 
     setIsImporting(false);
+    resetFileInput();
 
     await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
     await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
@@ -1143,6 +1153,7 @@ export default function RecentEntries() {
           </div>
 
           <input
+            key={fileInputKey}
             ref={fileInputRef}
             type="file"
             accept=".csv,.xlsx,.xls,.xlsm"
