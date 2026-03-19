@@ -650,6 +650,7 @@ export default function RecentEntries() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileInputKey, setFileInputKey] = useState(0); // increment to force-reset the file input
+  const cancelImportRef = useRef(false); // set to true to stop the import loop mid-flight
   const { toast } = useToast();
 
   const { data: currentUser } = useUser();
@@ -830,10 +831,15 @@ export default function RecentEntries() {
     setFileInputKey(k => k + 1);
   };
 
+  const handleStopImport = () => {
+    cancelImportRef.current = true;
+  };
+
   const handleImportCSV = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    cancelImportRef.current = false; // reset cancel flag for new import
     resetFileInput();
 
     const rows = await parseFile(file);
@@ -852,6 +858,20 @@ export default function RecentEntries() {
     let failCount = 0;
 
     for (const row of rows) {
+      // Check if user requested stop
+      if (cancelImportRef.current) {
+        toast({
+          title: "Import Stopped",
+          description: `Stopped after ${successCount} imported, ${failCount} skipped.`,
+        });
+        setIsImporting(false);
+        resetFileInput();
+        cancelImportRef.current = false;
+        await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+        await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+        return;
+      }
+
       const partNumber = fuzzyFind(row, RE_PART);
       const codeOrReason = fuzzyFind(row, RE_CODE);
       const quantity = parseInt(fuzzyFind(row, RE_QTY) || "1") || 1;
@@ -956,6 +976,7 @@ export default function RecentEntries() {
   const handleGSheetImport = async () => {
     if (!gsheetUrl.trim()) return;
 
+    cancelImportRef.current = false;
     setGsheetLoading(true);
 
     try {
@@ -994,6 +1015,14 @@ export default function RecentEntries() {
       let failCount = 0;
 
       for (const row of rows) {
+        if (cancelImportRef.current) {
+          toast({
+            title: "Import Stopped",
+            description: `Stopped after ${successCount} imported, ${failCount} skipped.`,
+          });
+          break;
+        }
+
         const partNumber = fuzzyFind(row, RE_PART);
         const codeOrReason = fuzzyFind(row, RE_CODE);
         const quantity = parseInt(fuzzyFind(row, RE_QTY) || "1") || 1;
@@ -1162,17 +1191,29 @@ export default function RecentEntries() {
             data-testid="input-import-csv"
           />
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isImporting}
-            className="h-9 gap-2"
-            data-testid="button-import-csv"
-          >
-            <Upload className="w-4 h-4" />
-            {isImporting ? "Importing..." : "Import CSV"}
-          </Button>
+          {isImporting ? (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleStopImport}
+              className="h-9 gap-2"
+              data-testid="button-stop-import"
+            >
+              <span className="w-3 h-3 rounded-sm bg-white inline-block" />
+              Stop Import
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+              className="h-9 gap-2"
+              data-testid="button-import-csv"
+            >
+              <Upload className="w-4 h-4" />
+              Import CSV
+            </Button>
+          )}
 
           <Button
             variant="outline"
