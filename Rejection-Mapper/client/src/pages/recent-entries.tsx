@@ -925,18 +925,25 @@ export default function RecentEntries() {
       return;
     }
 
+    // ── Compute a fingerprint so the server can resume a cancelled import ──
+    // Uses: total row count + serialised first row + serialised last row.
+    // This is fast, runs entirely in the browser, and is collision-resistant
+    // for any real-world file.
+    const fingerprint = `${rows.length}:${JSON.stringify(rows[0] ?? {})}:${JSON.stringify(rows[rows.length - 1] ?? {})}`;
+
     setIsImporting(true);
 
     // ── 1. Fire the import on the server and get back an importId immediately ──
     // The server processes everything in the background — tab switches, screen
     // lock, and computer sleep will NOT interrupt it.
     let importId: string;
+    let resumedFromRow = 0;
     try {
       const startRes = await fetch("/api/import-entries", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ rows }),
+        body: JSON.stringify({ rows, fingerprint }),
       });
       if (!startRes.ok) {
         const err = await startRes.json();
@@ -944,6 +951,14 @@ export default function RecentEntries() {
       }
       const startData = await startRes.json();
       importId = startData.importId;
+      resumedFromRow = startData.resumedFromRow ?? 0;
+
+      if (resumedFromRow > 0) {
+        toast({
+          title: "Resuming import",
+          description: `Skipping first ${resumedFromRow} already-imported rows. Continuing from row ${resumedFromRow + 1} of ${rows.length}.`,
+        });
+      }
     } catch (err: any) {
       if (isMountedRef.current) {
         toast({ title: "Import Failed", description: err.message, variant: "destructive" });
