@@ -925,17 +925,13 @@ export default function RecentEntries() {
       return;
     }
 
-    // ── Compute a fingerprint so the server can resume a cancelled import ──
-    // Uses: total row count + serialised first row + serialised last row.
-    // This is fast, runs entirely in the browser, and is collision-resistant
-    // for any real-world file.
-    const fingerprint = `${rows.length}:${JSON.stringify(rows[0] ?? {})}:${JSON.stringify(rows[rows.length - 1] ?? {})}`;
-
     setIsImporting(true);
 
     // ── 1. Fire the import on the server and get back an importId immediately ──
     // The server processes everything in the background — tab switches, screen
     // lock, and computer sleep will NOT interrupt it.
+    // The server computes a stable fingerprint itself and checks for a saved
+    // checkpoint — no fingerprint needs to be sent from the client.
     let importId: string;
     let resumedFromRow = 0;
     try {
@@ -943,7 +939,7 @@ export default function RecentEntries() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ rows, fingerprint }),
+        body: JSON.stringify({ rows }),
       });
       if (!startRes.ok) {
         const err = await startRes.json();
