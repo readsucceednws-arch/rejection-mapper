@@ -655,6 +655,7 @@ export default function RecentEntries() {
   const [fileInputKey, setFileInputKey] = useState(0); // increment to force-reset the file input
   const cancelImportRef = useRef(false); // set to true to stop the import loop mid-flight
   const isMountedRef = useRef(true);    // set to false on unmount to guard all state setters
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null); // cleared on unmount
   const { toast } = useToast();
 
   const { data: currentUser } = useUser();
@@ -834,7 +835,11 @@ export default function RecentEntries() {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
-      cancelImportRef.current = true; // also stop the loop if mid-flight
+      cancelImportRef.current = true; // signal poll loop to stop
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current); // clear the poll interval immediately
+        pollIntervalRef.current = null;
+      }
     };
   }, []);
 
@@ -892,13 +897,24 @@ export default function RecentEntries() {
       return;
     }
 
-    // ── 2. Poll for progress every 1.5 seconds ──────────────────────────────
-    // Polling continues even if the user switches tabs — the browser keeps
-    // running fetch() in the background. The import itself runs on the server.
-    const pollInterval = 1500;
+    // ── 2. Poll for progress using setInterval ──────────────────────────────
+    // setInterval is less throttled than setTimeout in background tabs.
+    // The import itself runs entirely on the server — tab switches don't affect it.
+    const pollInterval = 2500;
+    let pollCount = 0;
+    let intervalId: ReturnType<typeof setInterval>;
+
+    const stopPolling = () => {
+      clearInterval(intervalId);
+      pollIntervalRef.current = null;
+    };
+
     const poll = async (): Promise<void> => {
+      pollCount++;
+
       // If the user clicked Stop Import, cancel on server and stop polling
       if (cancelImportRef.current) {
+        stopPolling();
         await fetch(`/api/import-entries/${importId}/cancel`, {
           method: "POST",
           credentials: "include",
@@ -908,6 +924,7 @@ export default function RecentEntries() {
         if (isMountedRef.current) {
           toast({ title: "Import Stopped", description: "Import cancelled on the server." });
           setIsImporting(false);
+          setImportProgress(null);
           resetFileInput();
           cancelImportRef.current = false;
         }
@@ -921,7 +938,7 @@ export default function RecentEntries() {
         if (!res.ok) throw new Error("Lost contact with import");
         const progress = await res.json();
 
-        // Update progress display
+        // Update progress display (safe even in background tab)
         if (isMountedRef.current) {
           setImportProgress({
             processed: progress.processedRows,
@@ -933,12 +950,16 @@ export default function RecentEntries() {
         }
 
         if (progress.status === "running" || progress.status === "pending") {
-          // Still going — poll again
-          setTimeout(poll, pollInterval);
-          return;
+          // Refresh table every 4th poll (~every 10s) so rows appear live
+          if (pollCount % 4 === 0) {
+            queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+            queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+          }
+          return; // interval will fire again
         }
 
         // ── 3. Import finished (done / cancelled / failed) ──────────────────
+        stopPolling();
         await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
         await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
 
@@ -962,13 +983,14 @@ export default function RecentEntries() {
         }
 
       } catch {
-        // Network blip — keep polling, don't give up
-        setTimeout(poll, pollInterval * 2);
+        // Network blip — silently skip this tick, interval will retry
       }
     };
 
-    // Start polling
-    setTimeout(poll, pollInterval);
+    // Start polling immediately then every pollInterval
+    poll();
+    intervalId = setInterval(poll, pollInterval);
+    pollIntervalRef.current = intervalId; // store so useEffect cleanup can clear it
   };
 
     const handleGSheetImport = async () => {
