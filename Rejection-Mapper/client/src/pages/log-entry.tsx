@@ -11,14 +11,21 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertTriangle, RefreshCw, CheckCircle2 } from "lucide-react";
+import { AlertTriangle, RefreshCw, CheckCircle2, ChevronsUpDown, Check } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 type EntryType = "rejection" | "rework";
 
@@ -32,6 +39,80 @@ interface LoggedEntry {
   remarks?: string;
 }
 
+// ── Searchable combobox ────────────────────────────────────────────────────────
+function SearchableSelect({
+  options,
+  value,
+  onValueChange,
+  placeholder,
+  searchPlaceholder,
+  testId,
+}: {
+  options: { value: string; label: string; sublabel?: string }[];
+  value: string;
+  onValueChange: (val: string) => void;
+  placeholder: string;
+  searchPlaceholder: string;
+  testId?: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const selected = options.find((o) => o.value === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="w-full justify-between font-normal h-10 px-3"
+          data-testid={testId}
+        >
+          <span className={cn("truncate", !selected && "text-muted-foreground")}>
+            {selected ? selected.label : placeholder}
+          </span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+        <Command>
+          <CommandInput placeholder={searchPlaceholder} className="h-9" />
+          <CommandList>
+            <CommandEmpty>No results found.</CommandEmpty>
+            <CommandGroup>
+              {options.map((option) => (
+                <CommandItem
+                  key={option.value}
+                  value={`${option.label} ${option.sublabel ?? ""}`}
+                  onSelect={() => {
+                    onValueChange(option.value);
+                    setOpen(false);
+                  }}
+                >
+                  <Check
+                    className={cn(
+                      "mr-2 h-4 w-4 shrink-0",
+                      value === option.value ? "opacity-100" : "opacity-0"
+                    )}
+                  />
+                  <span className="truncate">{option.label}</span>
+                  {option.sublabel && (
+                    <span className="ml-2 text-xs text-muted-foreground truncate">
+                      {option.sublabel}
+                    </span>
+                  )}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
 export default function LogEntry() {
   const { toast } = useToast();
   const { data: parts } = useParts();
@@ -76,7 +157,10 @@ export default function LogEntry() {
             { partId: parseInt(partId), reworkTypeId: parseInt(typeId), quantity: qty, remarks: remarks || undefined, entryDate: entryDate || undefined },
             {
               onSuccess: (created) => {
-                setRecentlyLogged((prev) => [{ id: created.id, type: "rework", partNumber: part?.partNumber ?? "", code: reworkType?.reworkCode ?? "", quantity: qty, date: entryDate, remarks: remarks || undefined }, ...prev.slice(0, 9)]);
+                setRecentlyLogged((prev) => [
+                  { id: created.id, type: "rework", partNumber: part?.partNumber ?? "", code: reworkType?.reworkCode ?? "", quantity: qty, date: entryDate, remarks: remarks || undefined },
+                  ...prev.slice(0, 9),
+                ]);
                 resolve();
               },
               onError: reject,
@@ -90,7 +174,10 @@ export default function LogEntry() {
             { partId: parseInt(partId), rejectionTypeId: parseInt(typeId), quantity: qty, remarks: remarks || undefined, entryDate: entryDate || undefined },
             {
               onSuccess: (created) => {
-                setRecentlyLogged((prev) => [{ id: created.id, type: "rejection", partNumber: part?.partNumber ?? "", code: rejType?.rejectionCode ?? "", quantity: qty, date: entryDate, remarks: remarks || undefined }, ...prev.slice(0, 9)]);
+                setRecentlyLogged((prev) => [
+                  { id: created.id, type: "rejection", partNumber: part?.partNumber ?? "", code: rejType?.rejectionCode ?? "", quantity: qty, date: entryDate, remarks: remarks || undefined },
+                  ...prev.slice(0, 9),
+                ]);
                 resolve();
               },
               onError: reject,
@@ -109,7 +196,18 @@ export default function LogEntry() {
     }
   };
 
-  const sortedParts = [...(parts ?? [])].sort((a, b) => a.partNumber.localeCompare(b.partNumber));
+  // Build option lists for searchable selects
+  const partOptions = [...(parts ?? [])]
+    .sort((a, b) => a.partNumber.localeCompare(b.partNumber))
+    .map((p) => ({ value: String(p.id), label: p.partNumber, sublabel: p.description ?? undefined }));
+
+  const reworkOptions = (reworkTypes ?? [])
+    .sort((a, b) => a.reworkCode.localeCompare(b.reworkCode))
+    .map((t) => ({ value: String(t.id), label: t.reworkCode, sublabel: t.reason }));
+
+  const rejectionOptions = (rejectionTypes ?? [])
+    .sort((a, b) => a.rejectionCode.localeCompare(b.rejectionCode))
+    .map((t) => ({ value: String(t.id), label: t.rejectionCode, sublabel: t.reason }));
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 max-w-2xl">
@@ -136,58 +234,50 @@ export default function LogEntry() {
             </TabsList>
 
             <div className="mt-5 space-y-4">
+              {/* Part — searchable */}
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Part</label>
-                <Select value={partId} onValueChange={setPartId} data-testid="select-part">
-                  <SelectTrigger data-testid="select-trigger-part">
-                    <SelectValue placeholder="Select part…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {sortedParts.map((p) => (
-                      <SelectItem key={p.id} value={String(p.id)} data-testid={`option-part-${p.id}`}>
-                        {p.partNumber}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchableSelect
+                  options={partOptions}
+                  value={partId}
+                  onValueChange={setPartId}
+                  placeholder="Search part number…"
+                  searchPlaceholder="Type to search parts…"
+                  testId="select-part"
+                />
               </div>
 
+              {/* Rework type — searchable */}
               <TabsContent value="rework" className="mt-0 p-0">
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium">Rework Type</label>
-                  <Select value={typeId} onValueChange={setTypeId} data-testid="select-rework-type">
-                    <SelectTrigger data-testid="select-trigger-rework-type">
-                      <SelectValue placeholder="Select rework type…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(reworkTypes ?? []).map((t) => (
-                        <SelectItem key={t.id} value={String(t.id)} data-testid={`option-rw-${t.id}`}>
-                          {t.reworkCode} — {t.reason}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <SearchableSelect
+                    options={reworkOptions}
+                    value={typeId}
+                    onValueChange={setTypeId}
+                    placeholder="Search rework type…"
+                    searchPlaceholder="Type to search rework codes…"
+                    testId="select-rework-type"
+                  />
                 </div>
               </TabsContent>
 
+              {/* Rejection type — searchable */}
               <TabsContent value="rejection" className="mt-0 p-0">
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium">Rejection Type</label>
-                  <Select value={typeId} onValueChange={setTypeId} data-testid="select-rejection-type">
-                    <SelectTrigger data-testid="select-trigger-rejection-type">
-                      <SelectValue placeholder="Select rejection type…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(rejectionTypes ?? []).map((t) => (
-                        <SelectItem key={t.id} value={String(t.id)} data-testid={`option-rej-${t.id}`}>
-                          {t.rejectionCode} — {t.reason}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <SearchableSelect
+                    options={rejectionOptions}
+                    value={typeId}
+                    onValueChange={setTypeId}
+                    placeholder="Search rejection type…"
+                    searchPlaceholder="Type to search rejection codes…"
+                    testId="select-rejection-type"
+                  />
                 </div>
               </TabsContent>
 
+              {/* Quantity + Date */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium">Quantity</label>
@@ -199,13 +289,23 @@ export default function LogEntry() {
                 </div>
               </div>
 
+              {/* Remarks */}
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Remarks <span className="text-muted-foreground font-normal">(optional)</span></label>
+                <label className="text-sm font-medium">
+                  Remarks <span className="text-muted-foreground font-normal">(optional)</span>
+                </label>
                 <Input value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder="Any additional notes…" data-testid="input-remarks" />
               </div>
 
-              <Button className="w-full" onClick={handleSubmit} disabled={isSubmitting || !partId || !typeId} data-testid="button-log-entry">
-                {isSubmitting ? <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+              <Button
+                className="w-full"
+                onClick={handleSubmit}
+                disabled={isSubmitting || !partId || !typeId}
+                data-testid="button-log-entry"
+              >
+                {isSubmitting
+                  ? <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin mr-2" />
+                  : <CheckCircle2 className="w-4 h-4 mr-2" />}
                 {isSubmitting ? "Saving…" : "Log Entry"}
               </Button>
             </div>
@@ -213,6 +313,7 @@ export default function LogEntry() {
         </CardContent>
       </Card>
 
+      {/* Recently logged this session */}
       {recentlyLogged.length > 0 && (
         <Card className="border-border/50 shadow-sm">
           <CardHeader className="pb-2">
