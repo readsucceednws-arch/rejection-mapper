@@ -70,6 +70,36 @@ export async function initDb(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
 
+    -- Indexes for rejection_entries: speed up date-range filters, org scoping, and joins
+    CREATE INDEX IF NOT EXISTS "IDX_rejection_entries_org_date"
+      ON "rejection_entries" ("organization_id", "date" DESC);
+    CREATE INDEX IF NOT EXISTS "IDX_rejection_entries_part_id"
+      ON "rejection_entries" ("part_id");
+    CREATE INDEX IF NOT EXISTS "IDX_rejection_entries_rejection_type_id"
+      ON "rejection_entries" ("rejection_type_id");
+    CREATE INDEX IF NOT EXISTS "IDX_rejection_entries_zone_id"
+      ON "rejection_entries" ("zone_id");
+
+    -- Indexes for rework_entries: same pattern
+    CREATE INDEX IF NOT EXISTS "IDX_rework_entries_org_date"
+      ON "rework_entries" ("organization_id", "date" DESC);
+    CREATE INDEX IF NOT EXISTS "IDX_rework_entries_part_id"
+      ON "rework_entries" ("part_id");
+    CREATE INDEX IF NOT EXISTS "IDX_rework_entries_rework_type_id"
+      ON "rework_entries" ("rework_type_id");
+    CREATE INDEX IF NOT EXISTS "IDX_rework_entries_zone_id"
+      ON "rework_entries" ("zone_id");
+
+    -- Indexes for parts and types lookups used during import matching
+    CREATE INDEX IF NOT EXISTS "IDX_parts_org_id"
+      ON "parts" ("organization_id");
+    CREATE INDEX IF NOT EXISTS "IDX_rejection_types_org_id"
+      ON "rejection_types" ("organization_id");
+    CREATE INDEX IF NOT EXISTS "IDX_rework_types_org_id"
+      ON "rework_types" ("organization_id");
+    CREATE INDEX IF NOT EXISTS "IDX_zones_org_id"
+      ON "zones" ("organization_id");
+
     CREATE TABLE IF NOT EXISTS "organizations" (
       "id" serial PRIMARY KEY,
       "name" text NOT NULL,
