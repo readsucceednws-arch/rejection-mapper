@@ -20,15 +20,18 @@ declare module "http" {
   }
 }
 
+// 50 MB limit — the default 100 KB is too small for bulk imports.
+// At ~250 bytes/row, 50 MB supports ~200,000 rows in a single request.
 app.use(
   express.json({
+    limit: "50mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "50mb" }));
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
