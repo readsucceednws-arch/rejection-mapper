@@ -256,7 +256,6 @@ export class DatabaseStorage implements IStorage {
       where: and(...conditions),
       orderBy: [desc(rejectionEntries.date)],
       with: { part: true, rejectionType: true, zone: true },
-      limit: 500,
     });
 
     if (filters?.type) {
@@ -357,7 +356,6 @@ export class DatabaseStorage implements IStorage {
       where: and(...conditions),
       orderBy: [desc(reworkEntries.date)],
       with: { part: true, reworkType: true, zone: true },
-      limit: 500,
     });
 
     return this.attachLoggedByUsername(items);
