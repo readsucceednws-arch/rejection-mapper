@@ -11,9 +11,9 @@ interface ReworkFilters {
 
 export function useReworkEntries(filters?: ReworkFilters) {
   return useQuery<ReworkEntryResponse[]>({
-    queryKey: ["/api/rework-entries", filters],
+    queryKey: [api.reworkEntries.list.path, filters],
     queryFn: async () => {
-      const url = new URL("/api/rework-entries", window.location.origin);
+      const url = new URL(api.reworkEntries.list.path, window.location.origin);
       if (filters?.startDate) url.searchParams.set("startDate", filters.startDate);
       if (filters?.endDate) url.searchParams.set("endDate", filters.endDate);
       if (filters?.partId) url.searchParams.set("partId", filters.partId.toString());
@@ -42,7 +42,7 @@ export function useUpdateReworkEntry() {
       return res.json() as Promise<ReworkEntryResponse>;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/rework-entries"] });
+      queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
       queryClient.invalidateQueries({ queryKey: [api.reports.summary.path] });
     },
   });
@@ -65,7 +65,7 @@ export function useBulkDeleteReworkEntries() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/rework-entries"] });
+      queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
       queryClient.invalidateQueries({ queryKey: [api.reports.summary.path] });
     },
   });
@@ -99,7 +99,7 @@ export function useCreateReworkEntry() {
       return res.json() as Promise<ReworkEntryResponse>;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/rework-entries"] });
+      queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
     },
   });
 }
