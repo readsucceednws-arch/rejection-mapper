@@ -1,1366 +1,1673 @@
-import type { Express } from "express";
-import type { Server } from "http";
-import passport from "passport";
-import { storage } from "./storage";
-import { isAuthenticated, hashPassword, comparePassword, isGoogleAuthEnabled } from "./auth";
-import { sendInviteEmail, sendPasswordResetEmail, sendWorkerInviteEmail } from "./email";
+import { useRef, useState, useEffect } from "react";
 import { api } from "@shared/routes";
-import { z } from "zod";
-import type { User } from "@shared/schema";
+import * as XLSX from "xlsx";
+import { format } from "date-fns";
+import {
+  useRejectionEntries,
+  useCreateRejectionEntry,
+  useUpdateRejectionEntry,
+  useBulkDeleteRejectionEntries,
+} from "@/hooks/use-rejection-entries";
+import {
+  useReworkEntries,
+  useCreateReworkEntry,
+  useUpdateReworkEntry,
+  useBulkDeleteReworkEntries,
+} from "@/hooks/use-rework-entries";
+import { useParts } from "@/hooks/use-parts";
+import { useRejectionTypes } from "@/hooks/use-rejection-types";
+import { useReworkTypes } from "@/hooks/use-rework-types";
+import { useUser } from "@/hooks/use-auth";
+import { useToast } from "@/hooks/use-toast";
+import { queryClient } from "@/lib/queryClient";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import {
+  ClipboardX,
+  Filter,
+  AlertTriangle,
+  RefreshCw,
+  ListOrdered,
+  Download,
+  Upload,
+  Trash2,
+  Pencil,
+} from "lucide-react";
+import type { RejectionEntryResponse, ReworkEntryResponse } from "@shared/schema";
 
-function getOrgId(req: any): number {
-  const user = req.user as User;
-  if (!user?.organizationId) throw new Error("No organization associated with this account");
-  return user.organizationId;
+function slugify(val: string | undefined): string {
+  return (val ?? "")
+    .toString()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 }
 
-function getParamString(param: string | string[] | undefined): string {
-  if (Array.isArray(param)) return param[0] ?? "";
-  return param ?? "";
-}
+const RE_PART = new Set([
+  "partnumber",
+  "partno",
+  "partnum",
+  "pn",
+  "part",
+  "itemno",
+  "itemnumber",
+  "partcode",
+  "materialcode",
+  "material",
+  "materialno",
+]);
 
-function getParamId(param: string | string[] | undefined): number {
-  return Number.parseInt(getParamString(param), 10);
-}
+const RE_CODE = new Set([
+  "code",
+  "rejectioncode",
+  "rejcode",
+  "reworkcode",
+  "rwcode",
+  "reasoncode",
+  "typecode",
+  "failurecode",
+  "defectcode",
+  // Also match "Reason" / "Purpose" column headers used in standard Excel exports
+  "reason",
+  "purpose",
+  "reworkreason",
+  "rejectionreason",
+]);
 
-function isAdmin(req: any, res: any, next: any) {
-  if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
-  const user = req.user as User;
-  if (user.role !== "admin") return res.status(403).json({ message: "Admin access required" });
-  next();
-}
+const RE_QTY = new Set([
+  "quantity",
+  "qty",
+  "count",
+  "amount",
+  "units",
+  "pcs",
+  "pieces",
+  "nos",
+]);
 
-// ─── IMPORT STATE MANAGEMENT ───
-interface ImportState {
-  cancelled: boolean;
-  startTime: number;
-  orgId: number;
-  // Progress tracking — updated by the background job
-  status: "pending" | "running" | "done" | "failed" | "cancelled";
-  totalRows: number;
-  processedRows: number;
-  successfulImports: number;
-  failedRows: number;
-  message: string;
-  result?: Record<string, any>; // final result stored when done
-}
+const RE_REM = new Set([
+  "remarks",
+  "notes",
+  "note",
+  "comment",
+  "comments",
+  "observation",
+  "observations",
+]);
 
-const activeImports = new Map<string, ImportState>();
+const RE_DATE = new Set([
+  "date",
+  "entrydate",
+  "logdate",
+  "transactiondate",
+  "dateofentry",
+  "dateofrejection",
+  "inspectiondate",
+  "entrydt",
+]);
 
-function generateImportId(): string {
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-}
-
-function createImportState(orgId: number): { id: string; state: ImportState } {
-  const id = generateImportId();
-  const state: ImportState = {
-    cancelled: false,
-    startTime: Date.now(),
-    orgId,
-    status: "pending",
-    totalRows: 0,
-    processedRows: 0,
-    successfulImports: 0,
-    failedRows: 0,
-    message: "Starting...",
-  };
-  activeImports.set(id, state);
-  
-  // Auto-cleanup after 1 hour
-  setTimeout(() => {
-    activeImports.delete(id);
-  }, 60 * 60 * 1000);
-  
-  return { id, state };
-}
-
-export async function registerRoutes(
-  httpServer: Server,
-  app: Express
-): Promise<Server> {
-
-  // --- AUTH ROUTES (public) ---
-
-  app.get("/api/me", async (req, res) => {
-    if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
-    const user = req.user as User;
-    const { password, ...safeUser } = user;
-    if (user.organizationId) {
-      const org = await storage.getOrganizationById(user.organizationId);
-      return res.json({ ...safeUser, organizationName: org?.name, inviteCode: org?.inviteCode });
+function fuzzyFind(row: Record<string, string>, set: Set<string>): string {
+  for (const key of Object.keys(row)) {
+    const s = slugify(key);
+    if (set.has(s) || [...set].some((k) => s.includes(k) || k.includes(s))) {
+      if (row[key]?.trim()) return row[key].trim();
     }
-    res.json(safeUser);
-  });
+  }
+  return "";
+}
 
-  app.get("/api/has-users", async (req, res) => {
-    const count = await storage.getUserCount();
-    res.json({ hasUsers: count > 0 });
-  });
+// Safely convert an XLSX cell value to a plain string.
+// When cellDates:true is used, date cells become JS Date objects — toString()
+// on those gives a locale string like "Wed Apr 01 2026 00:00:00 GMT+0530".
+// Instead we format them as "YYYY-MM-DD" so the server receives a clean date.
+function xlsxCellToString(cell: any): string {
+  if (cell === undefined || cell === null) return "";
+  if (cell instanceof Date) {
+    const y = cell.getFullYear();
+    const m = String(cell.getMonth() + 1).padStart(2, "0");
+    const d = String(cell.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  return String(cell).trim();
+}
 
-  app.post("/api/create-org", async (req, res, next) => {
-    try {
-      const { orgName, email, password } = z.object({
-        orgName: z.string().min(2, "Organization name must be at least 2 characters"),
-        email: z.string().email("Invalid email address"),
-        password: z.string().min(6, "Password must be at least 6 characters"),
-      }).parse(req.body);
+async function parseFile(file: File): Promise<Record<string, string>[]> {
+  const ext = file.name.split(".").pop()?.toLowerCase();
 
-      const existing = await storage.getUserByEmail(email);
-      if (existing) return res.status(400).json({ message: "Email already in use" });
-
-      const org = await storage.createOrganization(orgName);
-      try {
-        await storage.seedOrganizationFromDefault(org.id);
-      } catch (seedErr) {
-        console.error("Warning: failed to seed org data:", seedErr);
-      }
-      const hashed = await hashPassword(password);
-      const user = await storage.createUser({ email, password: hashed, role: "admin", organizationId: org.id });
-
-      req.login(user, (err) => {
-        if (err) return next(err);
-        const { password: _, ...safeUser } = user;
-        res.status(201).json({ ...safeUser, organizationName: org.name, inviteCode: org.inviteCode });
-      });
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message });
-      }
-      next(err);
-    }
-  });
-
-  app.post("/api/join-org", async (req, res, next) => {
-    try {
-      const { inviteCode, email, username, password } = z.object({
-        inviteCode: z.string().min(1, "Invite code is required"),
-        email: z.string().email("Your email address is required"),
-        username: z.string().min(1, "Username is required"),
-        password: z.string().min(1, "Password is required"),
-      }).parse(req.body);
-
-      const org = await storage.getOrganizationByInviteCode(inviteCode);
-      if (!org) return res.status(400).json({ message: "Invalid invite code" });
-
-      const user = await storage.getUserByUsernameAndOrg(username, org.id);
-      if (!user) return res.status(400).json({ message: "No account found with that username in this organisation" });
-
-      const valid = await comparePassword(password, user.password);
-      if (!valid) return res.status(400).json({ message: "Incorrect password" });
-
-      if (email) {
-        const emailTaken = await storage.getUserByEmail(email);
-        if (emailTaken && emailTaken.id !== user.id) return res.status(400).json({ message: "That email is already in use" });
-        await storage.updateUserEmail(user.id, email);
-      }
-
-      const updatedUser = await storage.getUserById(user.id);
-      req.login(updatedUser!, (err) => {
-        if (err) return next(err);
-        const { password: _, ...safeUser } = updatedUser!;
-        res.json({ ...safeUser, organizationName: org.name, inviteCode: org.inviteCode });
-      });
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message });
-      }
-      next(err);
-    }
-  });
-
-  app.post("/api/login", (req, res, next) => {
-    passport.authenticate("local", (err: any, user: any, info: any) => {
-      if (err) return next(err);
-      if (!user) return res.status(401).json({ message: info?.message || "Invalid email or password" });
-      req.login(user, async (loginErr) => {
-        if (loginErr) return next(loginErr);
-        const { password, ...safeUser } = user;
-        if (user.organizationId) {
-          const org = await storage.getOrganizationById(user.organizationId);
-          return res.json({ ...safeUser, organizationName: org?.name, inviteCode: org?.inviteCode });
-        }
-        res.json(safeUser);
-      });
-    })(req, res, next);
-  });
-
-  app.post("/api/logout", (req, res, next) => {
-    req.logout((err) => {
-      if (err) return next(err);
-      res.json({ message: "Logged out" });
+  if (ext === "xlsx" || ext === "xls" || ext === "xlsm") {
+    const buffer = await file.arrayBuffer();
+    // cellDates:true → date cells become JS Date objects (avoids locale string issues)
+    // raw:true → keeps numbers as numbers; we stringify ourselves via xlsxCellToString
+    const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json<any[]>(sheet, {
+      header: 1,
+      raw: true,   // keep raw values so we control stringification
+      cellDates: true,
     });
-  });
 
-  app.post("/api/forgot-password", async (req, res, next) => {
-    try {
-      const { email } = z.object({ email: z.string().email() }).parse(req.body);
-      const user = await storage.getUserByEmail(email);
-      if (user) {
-        const token = await storage.createPasswordResetToken(user.id);
-        await sendPasswordResetEmail(email, token).catch((err) => {
-          console.error("Failed to send reset email:", err.message);
+    if (rows.length < 2) return [];
+
+    const headers = (rows[0] as any[])
+      .map((h) => xlsxCellToString(h).toLowerCase())
+      .filter(Boolean);
+
+    return (rows.slice(1) as any[][])
+      .filter((r) =>
+        r.some((c) => c !== undefined && c !== null && String(c).trim() !== "")
+      )
+      .map((row) => {
+        const obj: Record<string, string> = {};
+        headers.forEach((h, i) => {
+          obj[h] = xlsxCellToString(row[i]);
         });
-      }
-      res.json({ message: "If an account with that email exists, a reset link has been sent." });
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      next(err);
+        return obj;
+      });
+  }
+
+  const text = await file.text();
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) return [];
+
+  const headers = lines[0]
+    .split(",")
+    .map((h) => h.replace(/^"|"$/g, "").trim().toLowerCase());
+
+  return lines.slice(1).map((line) => {
+    const values =
+      line.match(/(".*?"|[^,]+|(?<=,)(?=,)|(?<=,)$|^(?=,))/g) ?? line.split(",");
+    const row: Record<string, string> = {};
+    headers.forEach((h, i) => {
+      row[h] = (values[i] ?? "").replace(/^"|"$/g, "").trim();
+    });
+    return row;
+  });
+}
+
+type UnifiedEntry =
+  | { source: "rejection"; data: RejectionEntryResponse }
+  | { source: "rework"; data: ReworkEntryResponse };
+
+function getEntryKey(entry: UnifiedEntry): string {
+  return entry.source === "rejection"
+    ? `rej-${entry.data.id}`
+    : `rw-${entry.data.id}`;
+}
+
+function resolveZone(val?: string | null): string {
+  if (!val || val === "rejection" || val === "rework") return "General";
+  return val;
+}
+
+function exportToCSV(entries: UnifiedEntry[], filename: string) {
+  const headers = [
+    "Date",
+    "Part Number",
+    "Code",
+    "Purpose",
+    "Zone",
+    "Logged By",
+    "Quantity",
+    "Remarks",
+  ];
+
+  const rows = entries.map((entry) => {
+    if (entry.source === "rejection") {
+      const e = entry.data;
+      return [
+        format(new Date(e.date), "yyyy-MM-dd HH:mm"),
+        e.part.partNumber,
+        e.rejectionType.rejectionCode,
+        e.rejectionType.type,
+        resolveZone(e.rejectionType.type),
+        e.loggedByUsername || "",
+        e.quantity,
+        e.remarks || "",
+      ];
+    } else {
+      const e = entry.data;
+      return [
+        format(new Date(e.date), "yyyy-MM-dd HH:mm"),
+        e.part.partNumber,
+        e.reworkType.reworkCode,
+        "rework",
+        resolveZone(e.reworkType.zone),
+        e.loggedByUsername || "",
+        e.quantity,
+        e.remarks || "",
+      ];
     }
   });
 
-  app.post("/api/reset-password", async (req, res, next) => {
-    try {
-      const { token, password } = z.object({
-        token: z.string().min(1),
-        password: z.string().min(6, "Password must be at least 6 characters"),
-      }).parse(req.body);
+  const csv = [headers, ...rows]
+    .map((row) =>
+      row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")
+    )
+    .join("\n");
 
-      const user = await storage.getUserByResetToken(token);
-      if (!user) return res.status(400).json({ message: "Invalid or expired reset link. Please request a new one." });
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
-      const hashed = await hashPassword(password);
-      await storage.updateUserPassword(user.id, hashed);
-      await storage.consumeResetToken(token);
+function DateFilterBar({
+  onApply,
+  onClear,
+  hasFilters,
+}: {
+  onApply: (start: string, end: string) => void;
+  onClear: () => void;
+  hasFilters: boolean;
+}) {
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
 
-      res.json({ message: "Password updated successfully. You can now sign in." });
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      next(err);
-    }
-  });
+  return (
+    <div className="flex items-center gap-2 bg-card p-1.5 rounded-lg border border-border/50 shadow-sm flex-wrap">
+      <div className="flex items-center gap-2 px-2">
+        <Input
+          type="date"
+          className="h-8 text-xs border-0 bg-transparent w-32"
+          value={start}
+          onChange={(e) => setStart(e.target.value)}
+        />
+        <span className="text-muted-foreground text-xs">to</span>
+        <Input
+          type="date"
+          className="h-8 text-xs border-0 bg-transparent w-32"
+          value={end}
+          onChange={(e) => setEnd(e.target.value)}
+        />
+      </div>
 
-  app.post("/api/invite", isAdmin, async (req, res, next) => {
-    try {
-      const { email } = z.object({ email: z.string().email("Invalid email address") }).parse(req.body);
-      const inviter = req.user as User;
-      const orgId = getOrgId(req);
-      const org = await storage.getOrganizationById(orgId);
-      if (!org) return res.status(404).json({ message: "Organisation not found" });
-      await sendInviteEmail(email, org.inviteCode, org.name, inviter.email ?? "an administrator");
-      res.json({ message: "Invite sent" });
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      next(err);
-    }
-  });
+      <Button
+        size="sm"
+        onClick={() => onApply(start, end)}
+        className="h-8"
+        data-testid="button-filter"
+      >
+        <Filter className="w-3 h-3 mr-1" />
+        Filter
+      </Button>
 
-  app.get("/api/auth/google/enabled", (_req, res) => {
-    res.json({ enabled: isGoogleAuthEnabled() });
-  });
+      {hasFilters && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            setStart("");
+            setEnd("");
+            onClear();
+          }}
+          className="h-8 text-destructive"
+        >
+          Clear
+        </Button>
+      )}
+    </div>
+  );
+}
 
-  app.get("/api/auth/google", passport.authenticate("google", { scope: ["profile", "email"] }));
+function EntriesTable({
+  entries,
+  isLoading,
+  isAdmin,
+  selectedKeys,
+  onToggle,
+  onToggleAll,
+  onEdit,
+}: {
+  entries: UnifiedEntry[];
+  isLoading: boolean;
+  isAdmin: boolean;
+  selectedKeys: Set<string>;
+  onToggle: (key: string) => void;
+  onToggleAll: (entries: UnifiedEntry[]) => void;
+  onEdit?: (entry: UnifiedEntry) => void;
+}) {
+  const allSelected =
+    entries.length > 0 && entries.every((e) => selectedKeys.has(getEntryKey(e)));
+  const colSpan = isAdmin ? 11 : 10;
 
-  app.get("/api/auth/google/callback",
-    passport.authenticate("google", { failureRedirect: "/?auth_error=google" }),
-    async (req, res) => {
-      const user = req.user as any;
-      const inviteCode = user?.__newOrgInviteCode;
-      if (inviteCode) {
-        res.redirect(`/?new_invite=${inviteCode}`);
-      } else {
-        res.redirect("/");
-      }
-    }
+  return (
+    <Card className="border-border/50 shadow-sm overflow-hidden">
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader className="bg-muted/40">
+            <TableRow>
+              {isAdmin && (
+                <TableHead className="w-[44px]">
+                  <Checkbox
+                    checked={allSelected}
+                    onCheckedChange={() => onToggleAll(entries)}
+                    aria-label="Select all"
+                    data-testid="checkbox-select-all-entries"
+                  />
+                </TableHead>
+              )}
+              <TableHead>Date</TableHead>
+              <TableHead>Part Number</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Code</TableHead>
+              <TableHead>Purpose</TableHead>
+              <TableHead>Zone</TableHead>
+              <TableHead>Logged By</TableHead>
+              <TableHead className="text-right">Quantity</TableHead>
+              <TableHead className="max-w-[260px]">Remarks</TableHead>
+              {isAdmin && <TableHead className="w-[60px]"></TableHead>}
+            </TableRow>
+          </TableHeader>
+
+          <TableBody>
+            {isLoading ? (
+              <TableRow>
+                <TableCell
+                  colSpan={colSpan}
+                  className="text-center py-12 text-muted-foreground"
+                >
+                  <div className="flex flex-col items-center">
+                    <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mb-2"></div>
+                    Loading entries...
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : entries.length > 0 ? (
+              entries.map((entry) => {
+                const key = getEntryKey(entry);
+                const isSelected = selectedKeys.has(key);
+
+                if (entry.source === "rejection") {
+                  const e = entry.data;
+                  const isRework = e.rejectionType.type === "rework";
+
+                  return (
+                    <TableRow
+                      key={key}
+                      className={`hover:bg-muted/20 transition-colors ${
+                        isSelected ? "bg-muted/40" : ""
+                      }`}
+                      data-testid={`row-entry-rej-${e.id}`}
+                    >
+                      {isAdmin && (
+                        <TableCell>
+                          <Checkbox
+                            checked={isSelected}
+                            onCheckedChange={() => onToggle(key)}
+                            aria-label={`Select entry ${e.id}`}
+                            data-testid={`checkbox-entry-rej-${e.id}`}
+                          />
+                        </TableCell>
+                      )}
+
+                      <TableCell className="whitespace-nowrap font-medium text-muted-foreground text-sm">
+                        {format(new Date(e.date), "MMM d, yyyy h:mm a")}
+                      </TableCell>
+
+                      <TableCell className="font-semibold text-primary">
+                        {e.part.partNumber}
+                      </TableCell>
+
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={
+                            isRework
+                              ? "bg-blue-500/10 text-blue-600 border-blue-400/30"
+                              : "bg-destructive/10 text-destructive border-destructive/20"
+                          }
+                        >
+                          {isRework ? "Rework" : "Rejection"}
+                        </Badge>
+                      </TableCell>
+
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={
+                            isRework
+                              ? "bg-blue-500/10 text-blue-600 border-blue-400/30"
+                              : "bg-destructive/10 text-destructive border-destructive/20"
+                          }
+                        >
+                          {e.rejectionType.rejectionCode}
+                        </Badge>
+                      </TableCell>
+
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={
+                            isRework
+                              ? "bg-blue-500/10 text-blue-600 border-blue-400/30 capitalize"
+                              : "bg-destructive/10 text-destructive border-destructive/20 capitalize"
+                          }
+                        >
+                          {e.rejectionType.type}
+                        </Badge>
+                      </TableCell>
+
+                      <TableCell className="text-sm text-muted-foreground">
+                        {resolveZone(e.rejectionType.type)}
+                      </TableCell>
+
+                      <TableCell className="text-sm text-muted-foreground">
+                        {e.loggedByUsername || "—"}
+                      </TableCell>
+
+                      <TableCell className="text-right font-display font-bold text-lg">
+                        {e.quantity}
+                      </TableCell>
+
+                      <TableCell
+                        className="text-sm text-muted-foreground truncate max-w-[260px]"
+                        title={e.remarks || ""}
+                      >
+                        {e.remarks || "—"}
+                      </TableCell>
+
+                      {isAdmin && (
+                        <TableCell>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7"
+                            onClick={() => onEdit?.({ source: "rejection", data: e })}
+                            data-testid={`btn-edit-rej-${e.id}`}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  );
+                }
+
+                const e = entry.data;
+
+                return (
+                  <TableRow
+                    key={key}
+                    className={`hover:bg-muted/20 transition-colors ${
+                      isSelected ? "bg-muted/40" : ""
+                    }`}
+                    data-testid={`row-entry-rw-${e.id}`}
+                  >
+                    {isAdmin && (
+                      <TableCell>
+                        <Checkbox
+                          checked={isSelected}
+                          onCheckedChange={() => onToggle(key)}
+                          aria-label={`Select rework entry ${e.id}`}
+                          data-testid={`checkbox-entry-rw-${e.id}`}
+                        />
+                      </TableCell>
+                    )}
+
+                    <TableCell className="whitespace-nowrap font-medium text-muted-foreground text-sm">
+                      {format(new Date(e.date), "MMM d, yyyy h:mm a")}
+                    </TableCell>
+
+                    <TableCell className="font-semibold text-primary">
+                      {e.part.partNumber}
+                    </TableCell>
+
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className="bg-blue-500/10 text-blue-600 border-blue-400/30"
+                      >
+                        Rework
+                      </Badge>
+                    </TableCell>
+
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className="bg-blue-500/10 text-blue-600 border-blue-400/30"
+                      >
+                        {e.reworkType.reworkCode}
+                      </Badge>
+                    </TableCell>
+
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className="bg-blue-500/10 text-blue-600 border-blue-400/30"
+                      >
+                        Rework
+                      </Badge>
+                    </TableCell>
+
+                    <TableCell className="text-sm text-muted-foreground">
+                      {resolveZone(e.reworkType.zone)}
+                    </TableCell>
+
+                    <TableCell className="text-sm text-muted-foreground">
+                      {e.loggedByUsername || "—"}
+                    </TableCell>
+
+                    <TableCell className="text-right font-display font-bold text-lg">
+                      {e.quantity}
+                    </TableCell>
+
+                    <TableCell
+                      className="text-sm text-muted-foreground truncate max-w-[260px]"
+                      title={e.remarks || ""}
+                    >
+                      {e.remarks || "—"}
+                    </TableCell>
+
+                    {isAdmin && (
+                      <TableCell>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          onClick={() => onEdit?.({ source: "rework", data: e })}
+                          data-testid={`btn-edit-rw-${e.id}`}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                );
+              })
+            ) : (
+              <TableRow>
+                <TableCell colSpan={colSpan} className="text-center py-16">
+                  <div className="flex flex-col items-center justify-center text-muted-foreground">
+                    <ClipboardX className="h-10 w-10 mb-3 opacity-20" />
+                    <p className="text-lg font-medium">No entries found</p>
+                    <p className="text-sm mt-1">
+                      Try adjusting your date filters or log a new entry.
+                    </p>
+                  </div>
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </Card>
+  );
+}
+
+export default function RecentEntries() {
+  const ITEMS_PER_PAGE = 150;
+
+  const [filters, setFilters] = useState<{ startDate?: string; endDate?: string }>(
+    {}
+  );
+  const [activeTab, setActiveTab] = useState("all");
+  const [isImporting, setIsImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{
+    processed: number; total: number; successful: number; failed: number; message: string;
+  } | null>(null);
+  const [gsheetUrl, setGsheetUrl] = useState("");
+  const [gsheetLoading, setGsheetLoading] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<UnifiedEntry | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [fileInputKey, setFileInputKey] = useState(0); // increment to force-reset the file input
+  const cancelImportRef = useRef(false); // set to true to stop the import loop mid-flight
+  const isMountedRef = useRef(true);    // set to false on unmount to guard all state setters
+  const { toast } = useToast();
+
+  const { data: currentUser } = useUser();
+  const isAdmin = currentUser?.role === "admin";
+
+  const { data: parts } = useParts();
+  const { data: rejectionTypes } = useRejectionTypes();
+  const { data: reworkTypes } = useReworkTypes();
+
+  const createRejectionMutation = useCreateRejectionEntry();
+  const createReworkMutation = useCreateReworkEntry();
+  const updateRejectionMutation = useUpdateRejectionEntry();
+  const updateReworkMutation = useUpdateReworkEntry();
+  const bulkDeleteRejectionMutation = useBulkDeleteRejectionEntries();
+  const bulkDeleteReworkMutation = useBulkDeleteReworkEntries();
+
+  const { data: rejectionEntries, isLoading: rejLoading } =
+    useRejectionEntries(filters);
+  const { data: reworkEntries, isLoading: rwLoading } = useReworkEntries(filters);
+
+  const isLoading = rejLoading || rwLoading;
+
+  const allEntries: UnifiedEntry[] = [
+    ...(rejectionEntries ?? []).map(
+      (d): UnifiedEntry => ({ source: "rejection", data: d })
+    ),
+    ...(reworkEntries ?? []).map(
+      (d): UnifiedEntry => ({ source: "rework", data: d })
+    ),
+  ].sort(
+    (a, b) => new Date(b.data.date).getTime() - new Date(a.data.date).getTime()
   );
 
-  // --- INVITE ACTIVATION (public) ---
+  const rejectionOnlyEntries = allEntries.filter(
+    (e) =>
+      e.source === "rejection" &&
+      (e.data as RejectionEntryResponse).rejectionType.type === "rejection"
+  );
 
-  app.get("/api/invite/:token", async (req, res, next) => {
-    try {
-      const token = String(req.params.token ?? "").trim();
-      const user = await storage.getUserByInviteToken(token);
-      if (!user) return res.status(400).json({ message: "This invite link is invalid or has expired." });
-      const org = await storage.getOrganizationById(user.organizationId!);
-      res.json({ username: user.username, email: user.email, orgName: org?.name ?? "" });
-    } catch (err) { next(err); }
-  });
+  const reworkOnlyEntries = allEntries.filter(
+    (e) =>
+      e.source === "rework" ||
+      (e.source === "rejection" &&
+        (e.data as RejectionEntryResponse).rejectionType.type === "rework")
+  );
 
-  app.post("/api/activate", async (req, res, next) => {
-    try {
-      const { token: rawToken, password } = z.object({
-        token: z.string().min(1),
-        password: z.string().min(6, "Password must be at least 6 characters"),
-      }).parse(req.body);
-      const token = rawToken.trim();
+  const currentEntries =
+    activeTab === "rejection"
+      ? rejectionOnlyEntries
+      : activeTab === "rework"
+      ? reworkOnlyEntries
+      : allEntries;
 
-      const user = await storage.getUserByInviteToken(token);
-      if (!user) return res.status(400).json({ message: "This invite link is invalid or has expired. Ask your admin to resend the invite." });
+  const filteredEntries =
+    searchTerm.trim() === ""
+      ? currentEntries
+      : currentEntries.filter((entry) => {
+          const searchLower = searchTerm.toLowerCase();
+          const dateStr = format(new Date(entry.data.date), "yyyy-MM-dd");
+          const timeStr = format(new Date(entry.data.date), "HH:mm");
+          const partNumber = entry.data.part.partNumber.toLowerCase();
+          const code =
+            entry.source === "rejection"
+              ? entry.data.rejectionType.rejectionCode.toLowerCase()
+              : entry.data.reworkType.reworkCode.toLowerCase();
+          const zone = resolveZone(
+            entry.source === "rejection"
+              ? entry.data.rejectionType.type
+              : entry.data.reworkType.zone
+          ).toLowerCase();
+          const loggedBy = (entry.data.loggedByUsername || "").toLowerCase();
 
-      const hashed = await hashPassword(password);
-      await storage.updateUserPassword(user.id, hashed);
-      await storage.consumeInviteToken(token);
+          return (
+            dateStr.includes(searchLower) ||
+            timeStr.includes(searchLower) ||
+            partNumber.includes(searchLower) ||
+            code.includes(searchLower) ||
+            zone.includes(searchLower) ||
+            loggedBy.includes(searchLower) ||
+            entry.data.remarks?.toLowerCase().includes(searchLower)
+          );
+        });
 
-      const updatedUser = await storage.getUserById(user.id);
-      req.login(updatedUser!, (err) => {
-        if (err) return next(err);
-        const { password: _, ...safeUser } = updatedUser!;
-        if (updatedUser!.organizationId) {
-          storage.getOrganizationById(updatedUser!.organizationId).then((org) => {
-            res.json({ ...safeUser, organizationName: org?.name, inviteCode: org?.inviteCode });
-          }).catch(next);
-        } else {
-          res.json(safeUser);
-        }
+  const totalPages = Math.ceil(filteredEntries.length / ITEMS_PER_PAGE);
+  const validPage = Math.max(1, Math.min(currentPage, totalPages || 1));
+  const startIndex = (validPage - 1) * ITEMS_PER_PAGE;
+  const endIndex = startIndex + ITEMS_PER_PAGE;
+  const paginatedEntries = filteredEntries.slice(startIndex, endIndex);
+
+  const handleTabChange = (tab: string) => {
+    setActiveTab(tab);
+    setSelectedKeys(new Set());
+    setCurrentPage(1);
+  };
+
+  const someSelected = selectedKeys.size > 0;
+
+  const toggleSelect = (key: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = (entries: UnifiedEntry[]) => {
+    const allKeys = entries.map(getEntryKey);
+    const allSelectedOnPage = allKeys.every((k) => selectedKeys.has(k));
+
+    if (allSelectedOnPage) {
+      setSelectedKeys((prev) => {
+        const next = new Set(prev);
+        allKeys.forEach((k) => next.delete(k));
+        return next;
       });
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      next(err);
+    } else {
+      setSelectedKeys((prev) => {
+        const next = new Set(prev);
+        allKeys.forEach((k) => next.add(k));
+        return next;
+      });
     }
-  });
+  };
 
-  // --- MEMBERS ---
-  app.get("/api/members", isAdmin, async (req, res, next) => {
+  const handleBulkDelete = async () => {
+    const rejIds: number[] = [];
+    const rwIds: number[] = [];
+
+    for (const key of selectedKeys) {
+      if (key.startsWith("rej-")) rejIds.push(parseInt(key.slice(4)));
+      else if (key.startsWith("rw-")) rwIds.push(parseInt(key.slice(3)));
+    }
+
     try {
-      const orgId = getOrgId(req);
-      const members = await storage.getUsersByOrganization(orgId);
-      res.json(members.map(({ password: _, ...m }) => m));
-    } catch (err) { next(err); }
-  });
-
-  app.post("/api/members", isAdmin, async (req, res, next) => {
-    try {
-      const orgId = getOrgId(req);
-      const parsed = z.object({
-        email: z.string().email("Enter a valid email address"),
-        username: z.string().min(2, "Username must be at least 2 characters").regex(/^\S+$/, "Username cannot contain spaces"),
-      }).parse(req.body);
-      const email = parsed.email.trim().toLowerCase();
-      const username = parsed.username.trim().toLowerCase();
-
-      const existingEmail = await storage.getUserByEmail(email);
-      if (existingEmail) {
-        if (existingEmail.organizationId !== orgId) {
-          return res.status(400).json({ message: "An account with that email already exists in another organisation" });
-        }
-
-        // Existing member in the same org: resend activation invite.
-        const token = await storage.createInviteToken(existingEmail.id);
-        const org = await storage.getOrganizationById(orgId);
-        try {
-          await sendWorkerInviteEmail(email, existingEmail.username ?? username, token, org?.name ?? "your organisation");
-        } catch (emailErr: any) {
-          console.error("[email] Failed to resend invite email:", emailErr?.message ?? emailErr);
-          return res.status(500).json({ message: emailErr?.message ?? "Failed to send invite email. Check email configuration." });
-        }
-
-        const { password: _, ...safeExisting } = existingEmail;
-        return res.status(200).json({ ...safeExisting, resent: true });
+      if (rejIds.length > 0) {
+        await bulkDeleteRejectionMutation.mutateAsync(rejIds);
+      }
+      if (rwIds.length > 0) {
+        await bulkDeleteReworkMutation.mutateAsync(rwIds);
       }
 
-      const existingUsername = await storage.getUserByUsername(username);
-      if (existingUsername) {
-        if (existingUsername.organizationId === orgId) {
-          return res.status(400).json({ message: "That username is already taken in your organisation" });
-        }
-        return res.status(400).json({ message: "That username is already taken in another organisation" });
+      toast({
+        title: "Deleted",
+        description: `${selectedKeys.size} log entr${
+          selectedKeys.size !== 1 ? "ies" : "y"
+        } removed.`,
+      });
+
+      setSelectedKeys(new Set());
+      setShowBulkConfirm(false);
+    } catch (err: any) {
+      toast({
+        title: "Error",
+        description: err.message,
+        variant: "destructive",
+      });
+      setShowBulkConfirm(false);
+    }
+  };
+
+  const handleExport = () => {
+    const dateStr = format(new Date(), "yyyy-MM-dd");
+    const tabLabel =
+      activeTab === "rejection"
+        ? "rejections"
+        : activeTab === "rework"
+        ? "reworks"
+        : "all";
+
+    exportToCSV(filteredEntries, `rejectmap-${tabLabel}-${dateStr}.csv`);
+  };
+
+  // Flip isMountedRef on unmount so the import loops stop calling setState
+  // and calling toast after the user has navigated away.
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      cancelImportRef.current = true; // also stop the loop if mid-flight
+    };
+  }, []);
+
+  // Always call this after any import attempt (success or failure) to ensure
+  // the file input is fully reset and cannot re-fire onChange on re-render.
+  const resetFileInput = () => {
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setFileInputKey(k => k + 1);
+    setImportProgress(null);
+  };
+
+  const handleStopImport = () => {
+    cancelImportRef.current = true;
+  };
+
+  const handleImportCSV = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    cancelImportRef.current = false;
+    resetFileInput();
+
+    const rows = await parseFile(file);
+    if (!rows.length) {
+      resetFileInput();
+      toast({ title: "Import Failed", description: "File is empty or has no valid data rows.", variant: "destructive" });
+      return;
+    }
+
+    setIsImporting(true);
+
+    // ── 1. Fire the import on the server and get back an importId immediately ──
+    // The server processes everything in the background — tab switches, screen
+    // lock, and computer sleep will NOT interrupt it.
+    let importId: string;
+    try {
+      const startRes = await fetch("/api/import-entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ rows }),
+      });
+      if (!startRes.ok) {
+        const err = await startRes.json();
+        throw new Error(err.message || "Failed to start import");
       }
+      const startData = await startRes.json();
+      importId = startData.importId;
+    } catch (err: any) {
+      if (isMountedRef.current) {
+        toast({ title: "Import Failed", description: err.message, variant: "destructive" });
+        setIsImporting(false);
+      }
+      resetFileInput();
+      return;
+    }
 
-      const { randomBytes } = await import("crypto");
-      const tempPassword = await hashPassword(randomBytes(32).toString("hex"));
-      const newUser = await storage.createUser({ email, username, password: tempPassword, organizationId: orgId });
-
-      const token = await storage.createInviteToken(newUser.id);
-      const org = await storage.getOrganizationById(orgId);
+    // ── 2. Poll for progress every 2 seconds ───────────────────────────────
+    // Polling continues even if the user switches tabs — the browser keeps
+    // running fetch() in the background. The import itself runs on the server.
+    const pollInterval = 2000;
+    let pollCount = 0;
+    const poll = async (): Promise<void> => {
+      pollCount++;
+      // If the user clicked Stop Import, cancel on server and stop polling
+      if (cancelImportRef.current) {
+        await fetch(`/api/import-entries/${importId}/cancel`, {
+          method: "POST",
+          credentials: "include",
+        }).catch(() => {});
+        await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+        await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+        if (isMountedRef.current) {
+          toast({ title: "Import Stopped", description: "Import cancelled on the server." });
+          setIsImporting(false);
+          resetFileInput();
+          cancelImportRef.current = false;
+        }
+        return;
+      }
 
       try {
-        await sendWorkerInviteEmail(email, username, token, org?.name ?? "your organisation");
-      } catch (emailErr: any) {
-        console.error("[email] Failed to send invite email:", emailErr?.message ?? emailErr);
-        await storage.deleteUser(newUser.id, orgId);
-        return res.status(500).json({ message: emailErr?.message ?? "Failed to send invite email. Check that RESEND_API_KEY is configured." });
-      }
+        const res = await fetch(`/api/import-entries/${importId}/progress`, {
+          credentials: "include",
+        });
+        if (!res.ok) throw new Error("Lost contact with import");
+        const progress = await res.json();
 
-      const { password: _, ...safe } = newUser;
-      res.status(201).json(safe);
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      next(err);
-    }
-  });
+        // Update progress display
+        if (isMountedRef.current) {
+          setImportProgress({
+            processed: progress.processedRows,
+            total: progress.totalRows,
+            successful: progress.successfulImports,
+            failed: progress.failedRows,
+            message: progress.message,
+          });
+        }
 
-  app.delete("/api/members/:id", isAdmin, async (req, res, next) => {
-    try {
-      const user = req.user as User;
-      const orgId = getOrgId(req);
-      const memberId = getParamId(req.params.id);
-      if (memberId === user.id) return res.status(400).json({ message: "You cannot remove yourself" });
-      await storage.deleteUser(memberId, orgId);
-      res.json({ message: "Member removed" });
-    } catch (err) { next(err); }
-  });
-
-  app.patch("/api/members/:id/password", isAdmin, async (req, res, next) => {
-    try {
-      const user = req.user as User;
-      const memberId = getParamId(req.params.id);
-      const { password } = z.object({
-        password: z.string().min(6, "Password must be at least 6 characters"),
-      }).parse(req.body);
-      const member = await storage.getUserById(memberId);
-      if (!member || member.organizationId !== user.organizationId) {
-        return res.status(404).json({ message: "Member not found" });
-      }
-      const hashed = await hashPassword(password);
-      await storage.updateUserPassword(memberId, hashed);
-      res.json({ message: "Password updated" });
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      next(err);
-    }
-  });
-
-  app.patch("/api/profile/password", isAuthenticated, async (req, res, next) => {
-    try {
-      const user = req.user as User;
-      const { currentPassword, newPassword } = z.object({
-        currentPassword: z.string().min(1, "Current password is required"),
-        newPassword: z.string().min(6, "New password must be at least 6 characters"),
-      }).parse(req.body);
-      const dbUser = await storage.getUserById(user.id);
-      if (!dbUser) return res.status(404).json({ message: "User not found" });
-      const valid = await comparePassword(currentPassword, dbUser.password);
-      if (!valid) return res.status(400).json({ message: "Current password is incorrect" });
-      const hashed = await hashPassword(newPassword);
-      await storage.updateUserPassword(user.id, hashed);
-      res.json({ message: "Password changed successfully" });
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      next(err);
-    }
-  });
-
-  // --- PARTS ---
-  app.get(api.parts.list.path, isAuthenticated, async (req, res) => {
-    const orgId = getOrgId(req);
-    const items = await storage.getParts(orgId);
-    res.json(items);
-  });
-
-  app.post(api.parts.create.path, isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const input = api.parts.create.input.parse(req.body);
-      const created = await storage.createPart({ ...input, organizationId: orgId });
-      res.status(201).json(created);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message, field: err.errors[0].path.join('.') });
-      }
-      throw err;
-    }
-  });
-
-  app.put("/api/parts/:id", isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const id = getParamId(req.params.id);
-      const input = api.parts.create.input.partial().parse(req.body);
-      const updated = await storage.updatePart(id, orgId, input);
-      res.json(updated);
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      throw err;
-    }
-  });
-
-  app.delete("/api/parts/bulk", isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const { ids } = z.object({ ids: z.array(z.number().int().positive()) }).parse(req.body);
-      await storage.bulkDeleteParts(ids, orgId);
-      res.status(200).json({ deleted: ids.length });
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      throw err;
-    }
-  });
-
-  app.delete("/api/parts/:id", isAdmin, async (req, res) => {
-    const orgId = getOrgId(req);
-    await storage.deletePart(getParamId(req.params.id), orgId);
-    res.status(204).end();
-  });
-
-  // --- REJECTION TYPES ---
-  app.get(api.rejectionTypes.list.path, isAuthenticated, async (req, res) => {
-    const orgId = getOrgId(req);
-    const items = await storage.getRejectionTypes(orgId);
-    res.json(items);
-  });
-
-  app.post(api.rejectionTypes.create.path, isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const input = api.rejectionTypes.create.input.parse(req.body);
-      const created = await storage.createRejectionType({ ...input, organizationId: orgId });
-      res.status(201).json(created);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message, field: err.errors[0].path.join('.') });
-      }
-      throw err;
-    }
-  });
-
-  app.put("/api/rejection-types/:id", isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const id = getParamId(req.params.id);
-      const input = api.rejectionTypes.create.input.partial().parse(req.body);
-      const updated = await storage.updateRejectionType(id, orgId, input);
-      res.json(updated);
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      throw err;
-    }
-  });
-
-  app.delete("/api/rejection-types/bulk", isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const { ids } = z.object({ ids: z.array(z.number().int().positive()) }).parse(req.body);
-      await storage.bulkDeleteRejectionTypes(ids, orgId);
-      res.status(200).json({ deleted: ids.length });
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      throw err;
-    }
-  });
-
-  app.delete("/api/rejection-types/:id", isAdmin, async (req, res) => {
-    const orgId = getOrgId(req);
-    await storage.deleteRejectionType(getParamId(req.params.id), orgId);
-    res.status(204).end();
-  });
-
-  // --- REJECTION ENTRIES ---
-  app.delete("/api/rejection-entries/bulk", isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const { ids } = z.object({ ids: z.array(z.number().int().positive()) }).parse(req.body);
-      await storage.bulkDeleteRejectionEntries(ids, orgId);
-      res.status(200).json({ deleted: ids.length });
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      throw err;
-    }
-  });
-
-  app.delete(`${api.reworkEntries.list.path}/bulk`, isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const { ids } = z.object({ ids: z.array(z.number().int().positive()) }).parse(req.body);
-      await storage.bulkDeleteReworkEntries(ids, orgId);
-      res.status(200).json({ deleted: ids.length });
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      throw err;
-    }
-  });
-
-  app.get(api.rejectionEntries.list.path, isAuthenticated, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const params = req.query;
-      const filters = {
-        startDate: params.startDate as string,
-        endDate: params.endDate as string,
-        partId: params.partId ? Number(params.partId) : undefined,
-        rejectionTypeId: params.rejectionTypeId ? Number(params.rejectionTypeId) : undefined,
-        type: params.type as string,
-      };
-      const items = await storage.getRejectionEntries(orgId, filters);
-      res.json(items);
-    } catch (err) {
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  app.post(api.rejectionEntries.create.path, isAuthenticated, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const user = req.user as User;
-      const input = api.rejectionEntries.create.input.parse(req.body);
-      const { entryDate, ...rest } = input;
-      const entryDateObj = entryDate ? new Date(entryDate) : undefined;
-
-      const entryPayload = {
-        ...rest,
-        organizationId: orgId,
-        createdByUsername: user.username ?? user.email ?? null,
-        ...(entryDateObj ? { date: entryDateObj } : {}),
-      };
-      const created = await storage.createRejectionEntry(entryPayload as any);
-      res.status(201).json(created);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message, field: err.errors[0].path.join('.') });
-      }
-      throw err;
-    }
-  });
-
-  app.patch("/api/rejection-entries/:id", isAuthenticated, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const id = getParamId(req.params.id);
-      const data = z.object({
-        rejectionTypeId: z.number().int().positive().optional(),
-        quantity: z.number().int().positive().optional(),
-        remarks: z.string().nullable().optional(),
-      }).parse(req.body);
-      const updated = await storage.updateRejectionEntry(id, orgId, data);
-      res.json(updated);
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      throw err;
-    }
-  });
-
-  app.patch(`${api.reworkEntries.list.path}/:id`, isAuthenticated, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const id = getParamId(req.params.id);
-      const data = z.object({
-        reworkTypeId: z.number().int().positive().optional(),
-        quantity: z.number().int().positive().optional(),
-        remarks: z.string().nullable().optional(),
-      }).parse(req.body);
-      const updated = await storage.updateReworkEntry(id, orgId, data);
-      res.json(updated);
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      throw err;
-    }
-  });
-
-  // --- REWORK TYPES ---
-  app.get("/api/rework-types", isAuthenticated, async (req, res) => {
-    const orgId = getOrgId(req);
-    const items = await storage.getReworkTypes(orgId);
-    res.json(items);
-  });
-
-  app.post("/api/rework-types", isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const parsed = z.object({
-        reworkCode: z.string().min(1, "Rework code is required"),
-        zone: z.string().optional(),
-      }).parse(req.body);
-      const input = {
-        reworkCode: parsed.reworkCode,
-        reason: parsed.reworkCode,
-        zone: parsed.zone,
-      };
-      const created = await storage.createReworkType({ ...input, organizationId: orgId });
-      res.status(201).json(created);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message, field: err.errors[0].path.join('.') });
-      }
-      throw err;
-    }
-  });
-
-  app.put("/api/rework-types/:id", isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const id = getParamId(req.params.id);
-      const parsed = z.object({
-        reworkCode: z.string().min(1, "Rework code is required").optional(),
-        zone: z.string().optional(),
-      }).parse(req.body);
-      const input = {
-        ...(parsed.reworkCode !== undefined ? { reworkCode: parsed.reworkCode } : {}),
-        ...(parsed.reworkCode !== undefined ? { reason: parsed.reworkCode } : {}),
-        ...(parsed.zone !== undefined ? { zone: parsed.zone } : {}),
-      };
-      const updated = await storage.updateReworkType(id, orgId, input);
-      res.json(updated);
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      throw err;
-    }
-  });
-
-  app.delete("/api/rework-types/bulk", isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const { ids } = z.object({ ids: z.array(z.number().int().positive()) }).parse(req.body);
-      await storage.bulkDeleteReworkTypes(ids, orgId);
-      res.status(200).json({ deleted: ids.length });
-    } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0].message });
-      throw err;
-    }
-  });
-
-  app.delete("/api/rework-types/:id", isAdmin, async (req, res) => {
-    const orgId = getOrgId(req);
-    await storage.deleteReworkType(getParamId(req.params.id), orgId);
-    res.status(204).end();
-  });
-
-  // --- REWORK ENTRIES ---
-  app.get(api.reworkEntries.list.path, isAuthenticated, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const params = req.query;
-      const filters = {
-        startDate: params.startDate as string | undefined,
-        endDate: params.endDate as string | undefined,
-        partId: params.partId ? Number(params.partId) : undefined,
-        reworkTypeId: params.reworkTypeId ? Number(params.reworkTypeId) : undefined,
-      };
-      const items = await storage.getReworkEntries(orgId, filters);
-      res.json(items);
-    } catch (err) {
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  app.post(api.reworkEntries.create.path, isAuthenticated, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const user = req.user as User;
-      const { insertReworkEntrySchema } = await import("@shared/schema");
-      // entryDate is now part of insertReworkEntrySchema (defined in shared/schema.ts)
-      // partId/reworkTypeId/quantity coercions still needed since they come from JSON
-      const input = insertReworkEntrySchema.extend({
-        partId: z.coerce.number(),
-        reworkTypeId: z.coerce.number(),
-        quantity: z.coerce.number().default(1),
-      }).parse(req.body);
-      const { entryDate, ...rest } = input;
-      const entryDateObj = entryDate ? new Date(entryDate) : undefined;
-      const created = await storage.createReworkEntry({
-        ...rest,
-        organizationId: orgId,
-        createdByUsername: user.username ?? user.email ?? null,
-        ...(entryDateObj ? { date: entryDateObj } : {}),
-      } as any);
-      res.status(201).json(created);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message, field: err.errors[0].path.join('.') });
-      }
-      throw err;
-    }
-  });
-
-  // --- GOOGLE SHEETS PROXY ---
-  app.get("/api/fetch-gsheet", isAuthenticated, async (req, res, next) => {
-    try {
-      const url = req.query.url as string;
-      if (!url) return res.status(400).json({ message: "URL is required" });
-      const match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-      if (!match) return res.status(400).json({ message: "Invalid Google Sheets URL" });
-      const sheetId = match[1];
-      const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-      const response = await fetch(exportUrl);
-      if (!response.ok) return res.status(400).json({ message: "Could not fetch sheet. Make sure it is shared as 'Anyone with the link can view'." });
-      const csv = await response.text();
-      res.json({ csv });
-    } catch (err) { next(err); }
-  });
-
-  // --- REPORTS ---
-  app.get(api.reports.summary.path, isAuthenticated, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const params = req.query;
-      const filters = { startDate: params.startDate as string, endDate: params.endDate as string };
-      const summary = await storage.getRejectionSummary(orgId, filters);
-      res.json(summary);
-    } catch (err) {
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  // --- ANALYTICS ---
-  app.get("/api/analytics/by-part", isAuthenticated, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const params = req.query;
-      const typeParam = Array.isArray(params.type) ? params.type[0] : params.type;
-      const filters = {
-        startDate: params.startDate as string | undefined,
-        endDate: params.endDate as string | undefined,
-        type: typeParam === "all" ? undefined : (typeParam as string | undefined),
-      };
-      const data = await storage.getPartWiseSummary(orgId, filters);
-      res.json(data);
-    } catch (err) {
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  app.get("/api/analytics/by-month", isAuthenticated, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const params = req.query;
-      const typeParam = Array.isArray(params.type) ? params.type[0] : params.type;
-      const filters = {
-        startDate: params.startDate as string | undefined,
-        endDate: params.endDate as string | undefined,
-        type: typeParam === "all" ? undefined : (typeParam as string | undefined),
-      };
-      const data = await storage.getMonthWiseSummary(orgId, filters);
-      res.json(data);
-    } catch (err) {
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  app.get("/api/analytics/by-cost", isAuthenticated, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const params = req.query;
-      const filters = {
-        startDate: params.startDate as string | undefined,
-        endDate: params.endDate as string | undefined,
-      };
-      const data = await storage.getCostSummary(orgId, filters);
-      res.json(data);
-    } catch (err) {
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  app.get("/api/analytics/by-zone", isAuthenticated, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const params = req.query;
-      const filters = {
-        startDate: params.startDate as string | undefined,
-        endDate: params.endDate as string | undefined,
-      };
-      const data = await storage.getZoneWiseSummary(orgId, filters);
-      res.json(data);
-    } catch (err) {
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  // --- ZONES ---
-  app.get("/api/zones", isAuthenticated, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const items = await storage.getZones(orgId);
-      res.json(items);
-    } catch (err) {
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  app.post("/api/zones", isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const { insertZoneSchema } = await import("@shared/schema");
-      const input = insertZoneSchema.parse({ ...req.body, organizationId: orgId });
-      const created = await storage.createZone(input);
-      res.status(201).json(created);
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message, field: err.errors[0].path.join('.') });
-      }
-      throw err;
-    }
-  });
-
-  app.put("/api/zones/:id", isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const id = getParamId(req.params.id);
-      const { name } = req.body;
-      if (!name || typeof name !== "string") {
-        return res.status(400).json({ message: "Zone name is required" });
-      }
-      const updated = await storage.updateZone(id, orgId, name.trim());
-      res.json(updated);
-    } catch (err) {
-      if (err instanceof Error && err.message === "Zone not found") {
-        return res.status(404).json({ message: "Zone not found" });
-      }
-      throw err;
-    }
-  });
-
-  app.delete("/api/zones/:id", isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      await storage.deleteZone(getParamId(req.params.id), orgId);
-      res.status(204).end();
-    } catch (err) {
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  // --- PROGRESS POLLING ENDPOINT ---
-  app.get("/api/import-entries/:id/progress", isAuthenticated, (req, res) => {
-    const importId = getParamString(req.params.id);
-    const state = activeImports.get(importId);
-    if (!state) {
-      return res.status(404).json({ message: "Import not found or already completed" });
-    }
-    res.json({
-      importId,
-      status: state.status,
-      totalRows: state.totalRows,
-      processedRows: state.processedRows,
-      successfulImports: state.successfulImports,
-      failedRows: state.failedRows,
-      message: state.message,
-      ...(state.result ? { result: state.result } : {}),
-    });
-  });
-
-  // --- ENTRIES IMPORT (Fire-and-forget background job) ---
-  // The client gets back an importId immediately, then polls /api/import-entries/:id/progress.
-  // This means the import continues even if the client tab is switched or the screen locks.
-  app.post("/api/import-entries", isAdmin, async (req, res, next) => {
-    const { 
-      ImportLogger, 
-      normalizeText, 
-      normalizeCode, 
-      normalizeForMatching,
-      safeNumber, 
-      safeDate, 
-      isBlank, 
-      flexibleMatch,
-      getRowCell,
-      createEmptySummary,
-      addFailedRow,
-      addWarning,
-      formatRowError 
-    } = await import("./import-utils");
-
-    const orgId = getOrgId(req);
-    const { id: importId, state: importState } = createImportState(orgId);
-
-    const { rows, dryRun }: { rows: Record<string, any>[]; dryRun?: boolean } = req.body;
-
-    if (!Array.isArray(rows) || rows.length === 0) {
-      activeImports.delete(importId);
-      return res.status(400).json({ message: "No rows provided", importId });
-    }
-
-    // Respond immediately with the importId — client polls for progress
-    importState.totalRows = rows.length;
-    importState.status = "running";
-    importState.message = `Starting import of ${rows.length} rows...`;
-    res.status(202).json({ importId, totalRows: rows.length, message: "Import started" });
-
-    // --- BACKGROUND PROCESSING (runs after response is sent) ---
-    const logger = new ImportLogger();
-    const summary = createEmptySummary();
-    summary.totalRows = rows.length;
-
-    try {
-      logger.info(`Starting import of ${rows.length} rows`, { dryRun: !!dryRun, importId });
-
-      // Load existing data
-      const existingParts = await storage.getParts(orgId);
-      const existingRejectionTypes = await storage.getRejectionTypes(orgId);
-      const existingReworkTypes = await storage.getReworkTypes(orgId);
-      const existingZones = await storage.getZones(orgId);
-
-      logger.debug(`Loaded existing data`, {
-        parts: existingParts.length,
-        rejectionTypes: existingRejectionTypes.length,
-        reworkTypes: existingReworkTypes.length,
-        zones: existingZones.length,
-      });
-
-      // Build lookup maps for efficient flexible matching
-      const partMap = new Map(
-        existingParts.map(p => [normalizeForMatching(p.partNumber), p])
-      );
-      const rejectionCodeMap = new Map(
-        existingRejectionTypes.map(rt => [normalizeCode(rt.rejectionCode), rt])
-      );
-      const reworkCodeMap = new Map(
-        existingReworkTypes.map(rw => [normalizeCode(rw.reworkCode), rw])
-      );
-      const zoneMap = new Map(
-        existingZones.map(z => [normalizeForMatching(z.name), z])
-      );
-
-      // Process each row
-      for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
-        // Check if import was cancelled
-        if (importState.cancelled) {
-          logger.warn(`Import cancelled by user at row ${rowIndex + 1}`);
-          importState.status = "cancelled";
-          importState.message = `Cancelled at row ${rowIndex + 1}. ${summary.successfulImports} of ${summary.totalRows} rows imported.`;
-          importState.result = { success: false, cancelled: true, summary, logs: logger.getLogs() };
-          activeImports.delete(importId);
+        if (progress.status === "running" || progress.status === "pending") {
+          // Refresh the table every 3rd poll (every ~6s) so imported rows appear live
+          if (pollCount % 3 === 0) {
+            queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+            queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+          }
+          setTimeout(poll, pollInterval);
           return;
         }
-        
-        const row = rows[rowIndex];
-        const rowNum = rowIndex + 1;
+
+        // ── 3. Import finished (done / cancelled / failed) ──────────────────
+        await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+        await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+
+        if (!isMountedRef.current) return;
+
+        setIsImporting(false);
+        setImportProgress(null);
+        resetFileInput();
+
+        if (progress.status === "done") {
+          const r = progress.result;
+          toast({
+            title: r?.summary?.successfulImports > 0 ? "Import Complete" : "Import Failed",
+            description: r?.message || progress.message,
+            variant: r?.summary?.successfulImports > 0 ? "default" : "destructive",
+          });
+        } else if (progress.status === "cancelled") {
+          toast({ title: "Import Stopped", description: progress.message });
+        } else {
+          toast({ title: "Import Failed", description: progress.message, variant: "destructive" });
+        }
+
+      } catch {
+        // Network blip — keep polling, don't give up
+        setTimeout(poll, pollInterval * 2);
+      }
+    };
+
+    // Start polling
+    setTimeout(poll, pollInterval);
+  };
+
+    const handleGSheetImport = async () => {
+    if (!gsheetUrl.trim()) return;
+
+    cancelImportRef.current = false;
+    setGsheetLoading(true);
+
+    try {
+      const res = await fetch(
+        `/api/fetch-gsheet?url=${encodeURIComponent(gsheetUrl)}`,
+        { credentials: "include" }
+      );
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast({
+          title: "Error",
+          description: data.message,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const blob = new Blob([data.csv], { type: "text/csv" });
+      const file = new File([blob], "google-sheet.csv", { type: "text/csv" });
+
+      setGsheetUrl("");
+
+      const rows = await parseFile(file);
+      if (!rows.length) {
+        toast({
+          title: "Import Failed",
+          description: "Sheet is empty or has no valid data rows.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setIsImporting(true);
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const row of rows) {
+        if (cancelImportRef.current) {
+          toast({
+            title: "Import Stopped",
+            description: `Stopped after ${successCount} imported, ${failCount} skipped.`,
+          });
+          break;
+        }
+
+        const partNumber = fuzzyFind(row, RE_PART);
+        const codeOrReason = fuzzyFind(row, RE_CODE);
+        const quantity = parseInt(fuzzyFind(row, RE_QTY) || "1") || 1;
+        const remarks = fuzzyFind(row, RE_REM);
+
+        const norm = (v: string | null | undefined) =>
+          (v ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+        const normCode = (v: string | null | undefined) =>
+          (v ?? "").toUpperCase().replace(/\s+/g, "").replace(/[\u2010-\u2014]/g, "-");
+
+        const part = parts?.find(
+          (p) => norm(p.partNumber) === norm(partNumber)
+        );
+
+        const normalizedCodeOrReason = norm(codeOrReason);
+        const normalizedCodeUpper = normCode(codeOrReason);
+
+        const reworkType = reworkTypes?.find(
+          (t) =>
+            normCode(t.reworkCode) === normalizedCodeUpper ||
+            norm(t.reason) === normalizedCodeOrReason
+        );
+
+        const rejType = rejectionTypes?.find(
+          (t) =>
+            normCode(t.rejectionCode) === normalizedCodeUpper ||
+            norm(t.reason) === normalizedCodeOrReason
+        );
+
+        if (!part || (!reworkType && !rejType)) {
+          failCount++;
+          continue;
+        }
 
         try {
-          // Extract fields — handles both original-case headers (from CSV text)
-          // and lowercase headers (from parseFile/XLSX which lowercases keys).
-          // Uses a helper that scans all keys case-insensitively.
-          const getField = (...candidates: string[]): string => {
-            for (const candidate of candidates) {
-              const lower = candidate.toLowerCase();
-              // Try exact match first
-              if (row[candidate] !== undefined && row[candidate] !== null && String(row[candidate]).trim()) {
-                return String(row[candidate]).trim();
-              }
-              // Try lowercase match
-              for (const key of Object.keys(row)) {
-                if (key.toLowerCase() === lower && row[key] !== undefined && row[key] !== null && String(row[key]).trim()) {
-                  return String(row[key]).trim();
-                }
-              }
+          await new Promise<void>((resolve, reject) => {
+            if (reworkType) {
+              createReworkMutation.mutate(
+                {
+                  partId: part.id,
+                  reworkTypeId: reworkType.id,
+                  quantity,
+                  remarks: remarks || undefined,
+                },
+                { onSuccess: () => resolve(), onError: reject }
+              );
+            } else if (rejType) {
+              createRejectionMutation.mutate(
+                {
+                  partId: part.id,
+                  rejectionTypeId: rejType.id,
+                  quantity,
+                  remarks: remarks || undefined,
+                },
+                { onSuccess: () => resolve(), onError: reject }
+              );
             }
-            return "";
-          };
-
-          const dateStr = normalizeText(getField("Date", "Entry Date", "entry_date", "LogDate", "Transaction Date"));
-          const partNumber = normalizeText(getField("Part Number", "part_number", "Part No", "PN", "Part", "Item", "Item Name", "Component"));
-          const typeField = normalizeText(getField("Type", "Entry Type", "Category", "Purpose", "purpose"));
-          const code = normalizeText(getField("Code", "Rejection Code", "Rework Code", "Reason", "RejectionCode", "ReworkCode", "ReasonCode"));
-          const purpose = normalizeText(getField("Purpose", "process", "Description", "description", "Operation"));
-          const zone = normalizeText(getField("Zone", "zone", "ZONE"));
-          const quantityStr = normalizeText(getField("Quantity", "quantity", "Qty", "QTY", "Count", "Pieces")) || "1";
-          const remarks = normalizeText(getField("Remarks", "remarks", "Notes", "notes", "Comment"));
-
-          // Validate required fields
-          if (isBlank(partNumber)) {
-            addFailedRow(summary, rowNum, "Missing part number");
-            logger.warn(formatRowError(rowNum, "Missing part number"), { row });
-            continue;
-          }
-
-          if (isBlank(code)) {
-            addFailedRow(summary, rowNum, "Missing rejection/rework code");
-            logger.warn(formatRowError(rowNum, "Missing code"), { row });
-            continue;
-          }
-
-          // Parse quantity
-          const quantity = safeNumber(quantityStr) || 1;
-          if (!Number.isFinite(quantity) || quantity <= 0) {
-            addFailedRow(summary, rowNum, `Invalid quantity: ${quantityStr}`);
-            logger.warn(formatRowError(rowNum, "Invalid quantity", quantityStr), { row });
-            continue;
-          }
-
-          // Parse date (default to now if missing)
-          const entryDate = safeDate(dateStr) || new Date();
-          
-          // Log the date parsing for debugging
-          if (dateStr) {
-            logger.debug(`Row ${rowNum} date parsing: Raw value="${dateStr}" → Parsed date="${entryDate.toISOString().split('T')[0]}"`);
-          }
-
-          // Determine entry type (rejection vs rework)
-          // Check Type field, Purpose field, and the Code itself
-          const typeNorm = normalizeForMatching(typeField).toLowerCase();
-          const codeNorm = normalizeForMatching(code).toLowerCase();
-          const purposeNorm = normalizeForMatching(purpose).toLowerCase();
-          const isRework = 
-            typeNorm.includes("rework") || typeNorm.includes("rw") ||
-            purposeNorm.includes("rework") || purposeNorm.includes("rw") ||
-            codeNorm.includes("rework");
-
-          logger.debug(`Processing row ${rowNum}`, {
-            partNumber,
-            code,
-            type: isRework ? "rework" : "rejection",
-            quantity,
           });
 
-          // Get or create part — try flexible match first, then exact, then loose
-          let part = partMap.get(normalizeForMatching(partNumber));
-          if (!part) {
-            // Secondary: scan all parts for loose key match (handles parens, dashes, spaces)
-            const looseKey = partNumber.toLowerCase().replace(/[^a-z0-9]/g, "");
-            for (const [k, v] of partMap.entries()) {
-              if (k.replace(/[^a-z0-9]/g, "") === looseKey) {
-                part = v;
-                break;
-              }
-            }
-          }
-          if (!part) {
-            logger.info(`Creating new part: ${partNumber}`);
-            if (!dryRun) {
-              part = await storage.createPart({
-                partNumber,
-                description: purpose || partNumber,
-                price: 0,
-                organizationId: orgId,
-              });
-              partMap.set(normalizeForMatching(partNumber), part);
-              summary.created.parts++;
-            } else {
-              // In dry run, create a fake part object
-              part = { 
-                id: -1, 
-                partNumber, 
-                description: purpose || partNumber,
-                price: 0,
-                organizationId: orgId
-              };
-            }
-          }
-
-          if (!part) {
-            addFailedRow(summary, rowNum, "Failed to get or create part");
-            logger.error(formatRowError(rowNum, "Failed to get or create part"), { partNumber });
-            continue;
-          }
-
-          // Get or create rejection/rework type
-          const normalizedCode = normalizeCode(code);
-
-          if (isRework) {
-            let reworkType = reworkCodeMap.get(normalizedCode);
-            if (!reworkType) {
-              // Try loose match — ignore dashes, spaces (e.g. "PLATING-REWORK" vs "PLATINGREWORK")
-              const looseCode = normalizedCode.replace(/[^A-Z0-9]/g, "");
-              for (const [k, v] of reworkCodeMap.entries()) {
-                if (k.replace(/[^A-Z0-9]/g, "") === looseCode) {
-                  reworkType = v;
-                  break;
-                }
-              }
-            }
-            if (!reworkType) {
-              logger.info(`Creating new rework type: ${normalizedCode}`);
-              if (!dryRun) {
-                reworkType = await storage.createReworkType({
-                  reworkCode: normalizedCode,
-                  reason: purpose || normalizedCode,
-                  zone: zone || null,
-                  organizationId: orgId,
-                });
-                reworkCodeMap.set(normalizedCode, reworkType);
-                summary.created.reworkTypes++;
-              } else {
-                reworkType = {
-                  id: -1,
-                  reworkCode: normalizedCode,
-                  reason: purpose || normalizedCode,
-                  zone: zone || null,
-                  organizationId: orgId,
-                };
-              }
-            }
-
-            if (!reworkType) {
-              addFailedRow(summary, rowNum, "Failed to get or create rework type");
-              logger.error(formatRowError(rowNum, "Failed to get or create rework type"), { code: normalizedCode });
-              continue;
-            }
-
-            // Get or create zone if specified
-            let zoneId: number | null = null;
-            if (!isBlank(zone)) {
-              let zoneObj = zoneMap.get(normalizeForMatching(zone));
-              if (!zoneObj) {
-                logger.info(`Creating new zone: ${zone}`);
-                if (!dryRun) {
-                  zoneObj = await storage.createZone({
-                    name: zone,
-                    organizationId: orgId,
-                  });
-                  zoneMap.set(normalizeForMatching(zone), zoneObj);
-                  summary.created.zones++;
-                } else {
-                  zoneObj = {
-                    id: -1,
-                    name: zone,
-                    organizationId: orgId,
-                    createdAt: new Date(),
-                  };
-                }
-              }
-              zoneId = zoneObj?.id || null;
-            }
-
-            // Create rework entry
-            if (!dryRun) {
-              await storage.createReworkEntry({
-                partId: part.id,
-                reworkTypeId: reworkType.id,
-                quantity,
-                remarks: remarks || null,
-                date: entryDate,
-                organizationId: orgId,
-                createdByUsername: (req.user as User).username ?? (req.user as User).email ?? null,
-                zoneId,
-              } as any);
-            }
-
-            logger.debug(`Rework entry processed for row ${rowNum}`);
-          } else {
-            // Rejection type
-            let rejectionType = rejectionCodeMap.get(normalizedCode);
-            if (!rejectionType) {
-              // Try loose match
-              const looseCode = normalizedCode.replace(/[^A-Z0-9]/g, "");
-              for (const [k, v] of rejectionCodeMap.entries()) {
-                if (k.replace(/[^A-Z0-9]/g, "") === looseCode) {
-                  rejectionType = v;
-                  break;
-                }
-              }
-            }
-            if (!rejectionType) {
-              logger.info(`Creating new rejection type: ${normalizedCode}`);
-              if (!dryRun) {
-                rejectionType = await storage.createRejectionType({
-                  rejectionCode: normalizedCode,
-                  reason: purpose || normalizedCode,
-                  type: "rejection",
-                  organizationId: orgId,
-                });
-                rejectionCodeMap.set(normalizedCode, rejectionType);
-                summary.created.rejectionTypes++;
-              } else {
-                rejectionType = {
-                  id: -1,
-                  rejectionCode: normalizedCode,
-                  reason: purpose || normalizedCode,
-                  type: "rejection",
-                  organizationId: orgId,
-                };
-              }
-            }
-
-            if (!rejectionType) {
-              addFailedRow(summary, rowNum, "Failed to get or create rejection type");
-              logger.error(formatRowError(rowNum, "Failed to get or create rejection type"), { code: normalizedCode });
-              continue;
-            }
-
-            // Get or create zone if specified
-            let zoneId: number | null = null;
-            if (!isBlank(zone)) {
-              let zoneObj = zoneMap.get(normalizeForMatching(zone));
-              if (!zoneObj) {
-                logger.info(`Creating new zone: ${zone}`);
-                if (!dryRun) {
-                  zoneObj = await storage.createZone({
-                    name: zone,
-                    organizationId: orgId,
-                  });
-                  zoneMap.set(normalizeForMatching(zone), zoneObj);
-                  summary.created.zones++;
-                } else {
-                  zoneObj = {
-                    id: -1,
-                    name: zone,
-                    organizationId: orgId,
-                    createdAt: new Date(),
-                  };
-                }
-              }
-              zoneId = zoneObj?.id || null;
-            }
-
-            // Create rejection entry
-            if (!dryRun) {
-              await storage.createRejectionEntry({
-                partId: part.id,
-                rejectionTypeId: rejectionType.id,
-                quantity,
-                remarks: remarks || null,
-                date: entryDate,
-                organizationId: orgId,
-                createdByUsername: (req.user as User).username ?? (req.user as User).email ?? null,
-                zoneId,
-              } as any);
-            }
-
-            logger.debug(`Rejection entry processed for row ${rowNum}`);
-          }
-
-          summary.successfulImports++;
-          importState.processedRows = rowIndex + 1;
-          importState.successfulImports = summary.successfulImports;
-          importState.message = `Processing row ${rowIndex + 1} of ${rows.length}...`;
-        } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : String(err);
-          addFailedRow(summary, rowNum, errorMsg);
-          importState.failedRows = summary.failedRows.length;
-          importState.processedRows = rowIndex + 1;
-          logger.error(formatRowError(rowNum, "Exception during processing", errorMsg), { 
-            error: err, 
-            row 
-          });
+          successCount++;
+        } catch {
+          failCount++;
         }
       }
 
-      if (dryRun) {
-        logger.info("DRY RUN COMPLETE - No data was inserted");
-        addWarning(summary, "This was a dry run - no data was actually imported");
-      } else {
-        logger.info(`Import complete`, {
-          successful: summary.successfulImports,
-          failed: summary.failedRows.length,
-          created: summary.created,
-        });
-      }
+      await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
+      await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
 
-      const finalMsg = dryRun
-        ? `Dry run: Would import ${summary.successfulImports} of ${summary.totalRows} rows`
-        : `Imported ${summary.successfulImports} of ${summary.totalRows} rows`;
+      if (!isMountedRef.current) return;
 
-      importState.status = "done";
-      importState.message = finalMsg;
-      importState.successfulImports = summary.successfulImports;
-      importState.failedRows = summary.failedRows.length;
-      importState.processedRows = summary.totalRows;
-      importState.result = {
-        success: true,
-        message: finalMsg,
-        summary,
-        logs: logger.getLogs(),
-      };
-      logger.info("Import complete", { successful: summary.successfulImports, failed: summary.failedRows.length });
+      setIsImporting(false);
 
-    } catch (err) {
-      logger.error("Import failed with fatal error", { error: err });
-      importState.status = "failed";
-      importState.message = err instanceof Error ? err.message : "Import failed";
-      importState.result = {
-        success: false,
-        message: importState.message,
-        summary,
-        logs: logger.getLogs(),
-      };
-    }
-  });
-
-  // Cancel an ongoing import
-  app.post("/api/import-entries/:id/cancel", isAdmin, (req, res) => {
-    const importId = getParamString(req.params.id);
-    const importState = activeImports.get(importId);
-
-    if (!importState) {
-      return res.status(404).json({
-        success: false,
-        message: "Import not found or already completed",
+      toast({
+        title: successCount > 0 ? "Import complete" : "Nothing imported",
+        description: `${successCount} entries imported${
+          failCount > 0 ? `, ${failCount} skipped` : ""
+        }.`,
+        variant: successCount === 0 ? "destructive" : "default",
       });
+    } catch {
+      toast({
+        title: "Error",
+        description: "Failed to fetch Google Sheet.",
+        variant: "destructive",
+      });
+    } finally {
+      if (isMountedRef.current) {
+        setGsheetLoading(false);
+      }
+    }
+  };
+
+  const isPendingDelete =
+    bulkDeleteRejectionMutation.isPending || bulkDeleteReworkMutation.isPending;
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-display font-bold text-foreground">
+            Recent Entries
+          </h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            Detailed logs of all rejected and reworked parts
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          {isAdmin && someSelected && (
+            <Button
+              variant="destructive"
+              onClick={() => setShowBulkConfirm(true)}
+              data-testid="button-bulk-delete-entries"
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Delete Selected ({selectedKeys.size})
+            </Button>
+          )}
+
+          <DateFilterBar
+            onApply={(start, end) => {
+              setFilters({
+                startDate: start || undefined,
+                endDate: end || undefined,
+              });
+              setSelectedKeys(new Set());
+              setCurrentPage(1);
+            }}
+            onClear={() => {
+              setFilters({});
+              setSelectedKeys(new Set());
+              setCurrentPage(1);
+            }}
+            hasFilters={!!(filters.startDate || filters.endDate)}
+          />
+
+          <div className="flex items-center gap-1 border border-border rounded-lg px-2 bg-card h-9">
+            <Input
+              placeholder="Google Sheets URL..."
+              value={gsheetUrl}
+              onChange={(e) => setGsheetUrl(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleGSheetImport()}
+              className="h-7 border-0 bg-transparent text-xs w-52 focus-visible:ring-0 px-1"
+              disabled={gsheetLoading || isImporting}
+              data-testid="input-gsheet-url"
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleGSheetImport}
+              disabled={!gsheetUrl.trim() || gsheetLoading || isImporting}
+              className="h-7 px-2 text-xs"
+              data-testid="button-import-gsheet"
+            >
+              {gsheetLoading ? (
+                <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+              ) : (
+                "Import"
+              )}
+            </Button>
+          </div>
+
+          <input
+            key={fileInputKey}
+            ref={fileInputRef}
+            type="file"
+            accept=".csv,.xlsx,.xls,.xlsm"
+            className="hidden"
+            onChange={handleImportCSV}
+            data-testid="input-import-csv"
+          />
+
+          {isImporting ? (
+            <div className="flex items-center gap-2">
+              {importProgress && (
+                <div className="text-xs text-muted-foreground text-right">
+                  <div className="font-medium">
+                    {importProgress.processed}/{importProgress.total} rows
+                  </div>
+                  <div className="text-green-600">✓ {importProgress.successful} imported</div>
+                </div>
+              )}
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleStopImport}
+                className="h-9 gap-2"
+                data-testid="button-stop-import"
+              >
+                <span className="w-3 h-3 rounded-sm bg-white inline-block" />
+                Stop Import
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+              className="h-9 gap-2"
+              data-testid="button-import-csv"
+            >
+              <Upload className="w-4 h-4" />
+              Import CSV
+            </Button>
+          )}
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExport}
+            disabled={filteredEntries.length === 0}
+            className="h-9 gap-2"
+            data-testid="button-export-csv"
+          >
+            <Download className="w-4 h-4" />
+            Export CSV
+          </Button>
+        </div>
+      </div>
+
+      <Tabs defaultValue="all" onValueChange={handleTabChange}>
+        <TabsList>
+          <TabsTrigger value="all" className="gap-2" data-testid="tab-all">
+            <ListOrdered className="w-4 h-4" />
+            All
+            <Badge variant="secondary" className="ml-1 text-xs">
+              {allEntries.length}
+            </Badge>
+          </TabsTrigger>
+
+          <TabsTrigger
+            value="rejection"
+            className="gap-2"
+            data-testid="tab-rejections"
+          >
+            <AlertTriangle className="w-4 h-4 text-destructive" />
+            Rejections
+            <Badge
+              variant="secondary"
+              className="ml-1 text-xs text-destructive"
+            >
+              {rejectionOnlyEntries.length}
+            </Badge>
+          </TabsTrigger>
+
+          <TabsTrigger value="rework" className="gap-2" data-testid="tab-reworks">
+            <RefreshCw className="w-4 h-4 text-blue-500" />
+            Reworks
+            <Badge variant="secondary" className="ml-1 text-xs text-blue-500">
+              {reworkOnlyEntries.length}
+            </Badge>
+          </TabsTrigger>
+        </TabsList>
+
+        <div className="mt-4 mb-4">
+          <Input
+            placeholder="Search by date, time, part number, code, zone, or remarks..."
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="w-full bg-background focus:ring-primary/20"
+            data-testid="input-search-entries"
+          />
+          {searchTerm && (
+            <p className="text-xs text-muted-foreground mt-2">
+              Found {filteredEntries.length} matching entr
+              {filteredEntries.length !== 1 ? "ies" : "y"} (
+              {totalPages > 1 ? `page ${validPage}/${totalPages}` : "1 page"})
+            </p>
+          )}
+        </div>
+
+        <TabsContent value="all" className="mt-4 space-y-4">
+          <EntriesTable
+            entries={paginatedEntries}
+            isLoading={isLoading}
+            isAdmin={isAdmin}
+            selectedKeys={selectedKeys}
+            onToggle={toggleSelect}
+            onToggleAll={toggleSelectAll}
+            onEdit={setEditingEntry}
+          />
+          {totalPages > 1 && (
+            <PaginationControls
+              currentPage={validPage}
+              totalPages={totalPages}
+              onPageChange={setCurrentPage}
+            />
+          )}
+        </TabsContent>
+
+        <TabsContent value="rejection" className="mt-4 space-y-4">
+          <EntriesTable
+            entries={paginatedEntries}
+            isLoading={isLoading}
+            isAdmin={isAdmin}
+            selectedKeys={selectedKeys}
+            onToggle={toggleSelect}
+            onToggleAll={toggleSelectAll}
+            onEdit={setEditingEntry}
+          />
+          {totalPages > 1 && (
+            <PaginationControls
+              currentPage={validPage}
+              totalPages={totalPages}
+              onPageChange={setCurrentPage}
+            />
+          )}
+        </TabsContent>
+
+        <TabsContent value="rework" className="mt-4 space-y-4">
+          <EntriesTable
+            entries={paginatedEntries}
+            isLoading={isLoading}
+            isAdmin={isAdmin}
+            selectedKeys={selectedKeys}
+            onToggle={toggleSelect}
+            onToggleAll={toggleSelectAll}
+            onEdit={setEditingEntry}
+          />
+          {totalPages > 1 && (
+            <PaginationControls
+              currentPage={validPage}
+              totalPages={totalPages}
+              onPageChange={setCurrentPage}
+            />
+          )}
+        </TabsContent>
+      </Tabs>
+
+      <AlertDialog open={showBulkConfirm} onOpenChange={setShowBulkConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Selected Entries?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You are about to permanently delete <strong>{selectedKeys.size}</strong>{" "}
+              log entr{selectedKeys.size !== 1 ? "ies" : "y"}. This action cannot
+              be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkDelete}
+              className="bg-destructive hover:bg-destructive/90"
+              data-testid="button-confirm-bulk-delete-entries"
+            >
+              {isPendingDelete ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <EditEntryDialog
+        entry={editingEntry}
+        onClose={() => setEditingEntry(null)}
+        rejectionTypes={rejectionTypes ?? []}
+        reworkTypes={reworkTypes ?? []}
+        updateRejection={updateRejectionMutation}
+        updateRework={updateReworkMutation}
+        toast={toast}
+      />
+    </div>
+  );
+}
+
+function PaginationControls({
+  currentPage,
+  totalPages,
+  onPageChange,
+}: {
+  currentPage: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+}) {
+  return (
+    <div className="flex items-center justify-center gap-2 mt-4 p-4 bg-card border border-border/50 rounded-lg">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => onPageChange(currentPage - 1)}
+        disabled={currentPage === 1}
+        data-testid="button-prev-page"
+      >
+        Previous
+      </Button>
+
+      <div className="flex items-center gap-1">
+        {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+          let pageNum: number;
+
+          if (totalPages <= 7) {
+            pageNum = i + 1;
+          } else if (currentPage <= 4) {
+            pageNum = i + 1;
+          } else if (currentPage >= totalPages - 3) {
+            pageNum = totalPages - 6 + i;
+          } else {
+            pageNum = currentPage - 3 + i;
+          }
+
+          if (pageNum > totalPages) return null;
+
+          return (
+            <Button
+              key={pageNum}
+              variant={currentPage === pageNum ? "default" : "outline"}
+              size="sm"
+              onClick={() => onPageChange(pageNum)}
+              className="w-10"
+              data-testid={`button-page-${pageNum}`}
+            >
+              {pageNum}
+            </Button>
+          );
+        })}
+      </div>
+
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => onPageChange(currentPage + 1)}
+        disabled={currentPage === totalPages}
+        data-testid="button-next-page"
+      >
+        Next
+      </Button>
+
+      <span className="text-xs text-muted-foreground ml-2">
+        Page {currentPage} of {totalPages}
+      </span>
+    </div>
+  );
+}
+
+function EditEntryDialog({
+  entry,
+  onClose,
+  rejectionTypes,
+  reworkTypes,
+  updateRejection,
+  updateRework,
+  toast,
+}: {
+  entry: UnifiedEntry | null;
+  onClose: () => void;
+  rejectionTypes: { id: number; rejectionCode: string; reason: string }[];
+  reworkTypes: { id: number; reworkCode: string; reason: string }[];
+  updateRejection: ReturnType<typeof useUpdateRejectionEntry>;
+  updateRework: ReturnType<typeof useUpdateReworkEntry>;
+  toast: ReturnType<typeof useToast>["toast"];
+}) {
+  const isRejection = entry?.source === "rejection";
+  const e = entry?.data;
+
+  const [typeId, setTypeId] = useState<string>("");
+  const [quantity, setQuantity] = useState<string>("");
+  const [remarks, setRemarks] = useState<string>("");
+
+  const prevEntry = useRef<UnifiedEntry | null>(null);
+  if (entry !== prevEntry.current) {
+    prevEntry.current = entry;
+
+    if (entry) {
+      if (entry.source === "rejection") {
+        const d = entry.data as RejectionEntryResponse;
+        setTypeId(String(d.rejectionTypeId));
+        setQuantity(String(d.quantity));
+        setRemarks(d.remarks ?? "");
+      } else {
+        const d = entry.data as ReworkEntryResponse;
+        setTypeId(String(d.reworkTypeId));
+        setQuantity(String(d.quantity));
+        setRemarks(d.remarks ?? "");
+      }
+    }
+  }
+
+  const isPending = updateRejection.isPending || updateRework.isPending;
+
+  function handleSave() {
+    if (!entry) return;
+
+    const qty = parseInt(quantity);
+    if (!typeId || isNaN(qty) || qty < 1) {
+      toast({
+        title: "Validation Error",
+        description: "Type and a positive quantity are required.",
+        variant: "destructive",
+      });
+      return;
     }
 
-    importState.cancelled = true;
-    res.json({
-      success: true,
-      message: "Import cancellation requested. Current row processing will halt.",
-      importId,
-    });
-  });
+    if (entry.source === "rejection") {
+      const d = entry.data as RejectionEntryResponse;
+      updateRejection.mutate(
+        {
+          id: d.id,
+          data: {
+            rejectionTypeId: parseInt(typeId),
+            quantity: qty,
+            remarks: remarks || null,
+          },
+        },
+        {
+          onSuccess: () => {
+            toast({ title: "Entry updated" });
+            onClose();
+          },
+          onError: (err: any) =>
+            toast({
+              title: "Error",
+              description: err.message,
+              variant: "destructive",
+            }),
+        }
+      );
+    } else {
+      const d = entry.data as ReworkEntryResponse;
+      updateRework.mutate(
+        {
+          id: d.id,
+          data: {
+            reworkTypeId: parseInt(typeId),
+            quantity: qty,
+            remarks: remarks || null,
+          },
+        },
+        {
+          onSuccess: () => {
+            toast({ title: "Rework entry updated" });
+            onClose();
+          },
+          onError: (err: any) =>
+            toast({
+              title: "Error",
+              description: err.message,
+              variant: "destructive",
+            }),
+        }
+      );
+    }
+  }
 
-  return httpServer;
+  return (
+    <Dialog
+      open={!!entry}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            Edit {isRejection ? "Rejection" : "Rework"} Entry
+          </DialogTitle>
+          <DialogDescription>
+            {e
+              ? `Part: ${(e as any).part?.partNumber} — ${format(
+                  new Date(e.date),
+                  "MMM d, yyyy"
+                )}`
+              : ""}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">
+              {isRejection ? "Rejection Type" : "Rework Type"}
+            </label>
+            <Select value={typeId} onValueChange={setTypeId} data-testid="select-edit-type">
+              <SelectTrigger data-testid="select-trigger-edit-type">
+                <SelectValue
+                  placeholder={
+                    isRejection ? "Select rejection type…" : "Select rework type…"
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {isRejection
+                  ? rejectionTypes.map((rt) => (
+                      <SelectItem
+                        key={rt.id}
+                        value={String(rt.id)}
+                        data-testid={`option-rej-type-${rt.id}`}
+                      >
+                        {rt.rejectionCode} — {rt.reason}
+                      </SelectItem>
+                    ))
+                  : reworkTypes.map((rw) => (
+                      <SelectItem
+                        key={rw.id}
+                        value={String(rw.id)}
+                        data-testid={`option-rw-type-${rw.id}`}
+                      >
+                        {rw.reworkCode} — {rw.reason}
+                      </SelectItem>
+                    ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Quantity</label>
+            <Input
+              type="number"
+              min={1}
+              value={quantity}
+              onChange={(ev) => setQuantity(ev.target.value)}
+              data-testid="input-edit-quantity"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Remarks</label>
+            <Input
+              value={remarks}
+              onChange={(ev) => setRemarks(ev.target.value)}
+              placeholder="Optional remarks…"
+              data-testid="input-edit-remarks"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button
+            variant="outline"
+            onClick={onClose}
+            disabled={isPending}
+            data-testid="btn-edit-cancel"
+          >
+            Cancel
+          </Button>
+          <Button onClick={handleSave} disabled={isPending} data-testid="btn-edit-save">
+            {isPending ? "Saving…" : "Save Changes"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }
