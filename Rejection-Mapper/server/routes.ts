@@ -47,35 +47,89 @@ interface ImportState {
 
 const activeImports = new Map<string, ImportState>();
 
-// ─── RESUME CHECKPOINT STORE ───
-// Keyed by `orgId:fingerprint`. Stores the last successfully processed row
-// index so a re-import of the same file can skip already-imported rows.
-interface ImportCheckpoint {
-  resumeFromRow: number;       // next row index to process (0-based)
-  successfulImports: number;   // rows already imported before cancel
-  storedAt: number;            // epoch ms — used for TTL
-}
+// ─── RESUME CHECKPOINT HELPERS (DB-backed, survives server restarts) ─────────
+//
+// The fingerprint is a fast stable hash of the file's content:
+//   - total row count
+//   - a sample of cell values spread evenly across the file
+// We avoid JSON.stringify of full rows because XLSX can re-parse the same file
+// with slightly different whitespace or number formatting on a second upload.
 
-const importCheckpoints = new Map<string, ImportCheckpoint>();
+function computeFingerprint(rows: Record<string, any>[]): string {
+  const total = rows.length;
+  if (total === 0) return "empty";
 
-// Clean up checkpoints older than 24 hours
-setInterval(() => {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  for (const [key, cp] of importCheckpoints) {
-    if (cp.storedAt < cutoff) importCheckpoints.delete(key);
+  // Sample up to 12 rows spread evenly: first, last, and 10 in between
+  const indices = new Set<number>([0, total - 1]);
+  if (total > 2) {
+    const step = Math.max(1, Math.floor(total / 10));
+    for (let i = step; i < total - 1; i += step) indices.add(i);
   }
-}, 60 * 60 * 1000);
 
-function makeFingerprint(rows: Record<string, any>[]): string {
-  // A lightweight fingerprint: total row count + first-row JSON + last-row JSON.
-  // Collisions are astronomically unlikely for real files.
-  const first = JSON.stringify(rows[0] ?? {});
-  const last  = JSON.stringify(rows[rows.length - 1] ?? {});
-  return `${rows.length}:${first}:${last}`;
+  // For each sampled row, take every cell value, normalise it, and concat
+  const parts: string[] = [`n=${total}`];
+  for (const idx of [...indices].sort((a, b) => a - b)) {
+    const row = rows[idx];
+    const vals = Object.values(row)
+      .map(v => String(v ?? "").trim().toLowerCase().replace(/\s+/g, " "))
+      .join("|");
+    parts.push(`r${idx}:${vals}`);
+  }
+
+  // Simple but collision-resistant djb2 hash over the combined string
+  const str = parts.join(";");
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
+    hash = hash >>> 0; // keep as 32-bit unsigned
+  }
+  return `${total}-${hash.toString(16)}`;
 }
 
-function checkpointKey(orgId: number, fingerprint: string): string {
-  return `${orgId}:${fingerprint}`;
+async function loadCheckpoint(orgId: number, fingerprint: string): Promise<{ resumeFromRow: number; successfulImports: number } | null> {
+  try {
+    const { pool } = await import("./db");
+    const result = await pool.query(
+      `SELECT resume_from_row, successful_imports FROM import_checkpoints
+       WHERE organization_id = $1 AND fingerprint = $2 LIMIT 1`,
+      [orgId, fingerprint]
+    );
+    if (result.rows.length === 0) return null;
+    return {
+      resumeFromRow: result.rows[0].resume_from_row,
+      successfulImports: result.rows[0].successful_imports,
+    };
+  } catch (err) {
+    console.error("[import] Failed to load checkpoint:", err);
+    return null;
+  }
+}
+
+async function saveCheckpoint(orgId: number, fingerprint: string, resumeFromRow: number, successfulImports: number): Promise<void> {
+  try {
+    const { pool } = await import("./db");
+    await pool.query(
+      `INSERT INTO import_checkpoints (organization_id, fingerprint, resume_from_row, successful_imports)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (organization_id, fingerprint)
+       DO UPDATE SET resume_from_row = $3, successful_imports = $4, created_at = now()`,
+      [orgId, fingerprint, resumeFromRow, successfulImports]
+    );
+  } catch (err) {
+    console.error("[import] Failed to save checkpoint:", err);
+  }
+}
+
+async function clearCheckpoint(orgId: number, fingerprint: string): Promise<void> {
+  try {
+    const { pool } = await import("./db");
+    await pool.query(
+      `DELETE FROM import_checkpoints WHERE organization_id = $1 AND fingerprint = $2`,
+      [orgId, fingerprint]
+    );
+  } catch (err) {
+    console.error("[import] Failed to clear checkpoint:", err);
+  }
 }
 
 function generateImportId(): string {
@@ -1075,7 +1129,7 @@ export async function registerRoutes(
     const orgId = getOrgId(req);
     const { id: importId, state: importState } = createImportState(orgId);
 
-    const { rows, dryRun, fingerprint }: { rows: Record<string, any>[]; dryRun?: boolean; fingerprint?: string } = req.body;
+    const { rows, dryRun }: { rows: Record<string, any>[]; dryRun?: boolean } = req.body;
 
     if (!Array.isArray(rows) || rows.length === 0) {
       activeImports.delete(importId);
@@ -1083,36 +1137,36 @@ export async function registerRoutes(
     }
 
     // ── Resume logic ─────────────────────────────────────────────────────────
-    // If the client sends a fingerprint and we have a stored checkpoint for it,
-    // skip the already-imported rows and start from where we left off.
+    // Compute a stable fingerprint server-side (client no longer sends it).
+    // Then check the DB for a saved checkpoint for this file + org combination.
+    const fileFingerprint = dryRun ? null : computeFingerprint(rows);
     let startFromRow = 0;
     let priorSuccessful = 0;
-    if (fingerprint && !dryRun) {
-      const cpKey = checkpointKey(orgId, fingerprint);
-      const checkpoint = importCheckpoints.get(cpKey);
+
+    if (fileFingerprint) {
+      const checkpoint = await loadCheckpoint(orgId, fileFingerprint);
       if (checkpoint && checkpoint.resumeFromRow > 0 && checkpoint.resumeFromRow < rows.length) {
-        startFromRow = checkpoint.resumeFromRow;
+        startFromRow    = checkpoint.resumeFromRow;
         priorSuccessful = checkpoint.successfulImports;
-        importCheckpoints.delete(cpKey); // consume checkpoint — will be re-saved if cancelled again
       }
     }
 
     // Respond immediately with the importId — client polls for progress
-    importState.totalRows = rows.length;
-    importState.status = "running";
+    importState.totalRows         = rows.length;
+    importState.status            = "running";
+    importState.processedRows     = startFromRow;
+    importState.successfulImports = priorSuccessful;
     const resumingMsg = startFromRow > 0
       ? `Resuming from row ${startFromRow + 1} of ${rows.length} (${priorSuccessful} already imported)...`
       : `Starting import of ${rows.length} rows...`;
     importState.message = resumingMsg;
-    importState.processedRows = startFromRow;
-    importState.successfulImports = priorSuccessful;
     res.status(202).json({ importId, totalRows: rows.length, resumedFromRow: startFromRow, message: resumingMsg });
 
     // --- BACKGROUND PROCESSING (runs after response is sent) ---
     const logger = new ImportLogger();
     const summary = createEmptySummary();
     summary.totalRows = rows.length;
-    summary.successfulImports = priorSuccessful; // carry over rows already imported before resume
+    summary.successfulImports = priorSuccessful; // carry over already-imported rows
 
     try {
       logger.info(`Starting import of ${rows.length} rows`, { dryRun: !!dryRun, importId });
@@ -1153,13 +1207,9 @@ export async function registerRoutes(
           importState.message = `Cancelled at row ${rowIndex + 1}. ${summary.successfulImports} of ${summary.totalRows} rows imported.`;
           importState.result = { success: false, cancelled: true, summary, logs: logger.getLogs() };
 
-          // Save a checkpoint so the same file can resume from here next time
-          if (fingerprint && !dryRun) {
-            importCheckpoints.set(checkpointKey(orgId, fingerprint), {
-              resumeFromRow: rowIndex,           // start exactly at the cancelled row next time
-              successfulImports: summary.successfulImports,
-              storedAt: Date.now(),
-            });
+          // Persist checkpoint to DB so the same file resumes here on next upload
+          if (fileFingerprint) {
+            await saveCheckpoint(orgId, fileFingerprint, rowIndex, summary.successfulImports);
           }
 
           activeImports.delete(importId);
@@ -1504,8 +1554,8 @@ export async function registerRoutes(
       importState.processedRows = summary.totalRows;
 
       // Clear any stored checkpoint for this file — it completed successfully
-      if (fingerprint && !dryRun) {
-        importCheckpoints.delete(checkpointKey(orgId, fingerprint));
+      if (fileFingerprint) {
+        await clearCheckpoint(orgId, fileFingerprint);
       }
 
       importState.result = {
