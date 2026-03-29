@@ -42,6 +42,7 @@ export const rejectionTypes = pgTable("rejection_types", {
   rejectionCode: text("rejection_code").notNull(),
   reason: text("reason").notNull(),
   type: text("type").notNull().default("rejection"),
+  zone: text("zone"),
   organizationId: integer("organization_id").references(() => organizations.id),
 });
 
