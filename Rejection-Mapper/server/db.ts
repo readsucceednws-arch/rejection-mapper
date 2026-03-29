@@ -201,7 +201,8 @@ export async function initDb(): Promise<void> {
     ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "logged_by_user_id" integer REFERENCES "users"("id");
     ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text;
 
-      ALTER TABLE "rework_types" ADD COLUMN IF NOT EXISTS "zone" text;
+    ALTER TABLE "rework_types" ADD COLUMN IF NOT EXISTS "zone" text;
+    ALTER TABLE "rejection_types" ADD COLUMN IF NOT EXISTS "zone" text;
 
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "rate" double precision;
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "amount" double precision;
