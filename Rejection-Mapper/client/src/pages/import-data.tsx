@@ -33,6 +33,7 @@ type ColumnMap = {
   rate: string | null;
   amount: string | null;
   remarks: string | null;
+  zone: string | null;
 };
 
 type FieldType =
@@ -252,6 +253,12 @@ const AMOUNT_SLUGS = new Set([
   "amount", "value", "total", "totalamount", "totalvalue", "totalcost", "linecost",
 ]);
 
+const ZONE_SLUGS = new Set([
+  "zone", "zonename", "area", "location", "section", "department", "dept",
+  "workzone", "productionzone", "productionarea", "shopfloor", "plant",
+  "supplier", "vendor", "outsource",
+]);
+
 const PHRASE_ALIASES: { phrase: string; weight: number }[] = [
   { phrase: "part number", weight: 3 },
   { phrase: "part no", weight: 3 },
@@ -296,6 +303,7 @@ const ALL_KNOWN_SLUGS = new Set([
   ...DATE_SLUGS,
   ...RATE_SLUGS,
   ...AMOUNT_SLUGS,
+  ...ZONE_SLUGS,
 ]);
 
 function scoreCell(cell: string): number {
@@ -411,6 +419,7 @@ function canonicalForHeader(h: string): keyof ColumnMap | null {
   if (matchesAny(h, RATE_SLUGS)) return "rate";
   if (matchesAny(h, AMOUNT_SLUGS)) return "amount";
   if (matchesAny(h, REMARKS_SLUGS)) return "remarks";
+  if (matchesAny(h, ZONE_SLUGS)) return "zone";
   return null;
 }
 
@@ -455,6 +464,7 @@ function buildColumnMap(headers: string[]): ColumnMap {
     rate: findHeader(headers, RATE_SLUGS),
     amount: findHeader(headers, AMOUNT_SLUGS),
     remarks: findHeader(headers, REMARKS_SLUGS),
+    zone: findHeader(headers, ZONE_SLUGS),
   };
 }
 
@@ -841,6 +851,7 @@ const CANONICAL_FIELDS: { key: keyof ColumnMap; label: string }[] = [
   { key: "rate", label: "Rate / Price" },
   { key: "amount", label: "Amount / Value" },
   { key: "remarks", label: "Remarks / Notes" },
+  { key: "zone", label: "Zone / Area" },
 ];
 
 const FIELD_TYPE_LABELS: Record<FieldType, string> = {
@@ -891,12 +902,12 @@ const TAB_CONFIG: Record<
   "rejection-reasons": {
     label: "Rejection Reasons",
     primaryHeaders: ["Rejection Code", "Reject Code", "Code", "Defect Code", "NCR Code"],
-    helpNote: "Each row becomes one rejection reason. Include a Code column and optionally a Reason/Description column.",
+    helpNote: "Each row becomes one rejection reason. Include a Code column, optionally a Reason/Description column, and optionally a Zone column.",
   },
   "rework-types": {
     label: "Rework Types",
     primaryHeaders: ["Rework Code", "RW Code", "Rework Type", "Rework Reason"],
-    helpNote: "Each row becomes one rework type. Include a Rework Code column and optionally a Description column.",
+    helpNote: "Each row becomes one rework type. Include a Rework Code column, optionally a Description column, and optionally a Zone column.",
   },
 };
 
@@ -1581,6 +1592,10 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
               normalizeText(cm.description ? row[cm.description] : "") ||
               normalizeText(findCol(row, DESC_SLUGS));
 
+            const rawZone =
+              normalizeText(cm.zone ? row[cm.zone] : "") ||
+              normalizeText(findCol(row, ZONE_SLUGS));
+
             if (!rawCodeValue && !descRaw) {
               result.skipped++;
               continue;
@@ -1607,6 +1622,7 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
                   rejectionCode: code,
                   reason: reason || code,
                   type: "rejection",
+                  ...(rawZone ? { zone: rawZone } : {}),
                 },
                 {
                   onSuccess: (t) => resolve(t),
@@ -1641,6 +1657,10 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
               normalizeText(cm.description ? row[cm.description] : "") ||
               normalizeText(findCol(row, DESC_SLUGS));
 
+            const rawZone =
+              normalizeText(cm.zone ? row[cm.zone] : "") ||
+              normalizeText(findCol(row, ZONE_SLUGS));
+
             if (!rawCode && !rawReason) {
               result.skipped++;
               continue;
@@ -1666,6 +1686,7 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
                 {
                   reworkCode: code,
                   reason: reason || "",
+                  ...(rawZone ? { zone: rawZone } : {}),
                 },
                 {
                   onSuccess: (t) => resolve(t),
@@ -1757,6 +1778,7 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
     if (importType === "rejection-reasons") {
       const codeCol = cm.rejectionCode ?? cm.partNumber ?? section.allHeaders[0];
       const descCol = cm.description;
+      const zoneCol = cm.zone;
 
       return (
         <div className="overflow-x-auto rounded border border-border">
@@ -1765,6 +1787,7 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
               <tr className="bg-muted/60">
                 <th className="px-3 py-2 text-left font-medium text-muted-foreground">Code</th>
                 <th className="px-3 py-2 text-left font-medium text-muted-foreground">Reason / Description</th>
+                {zoneCol && <th className="px-3 py-2 text-left font-medium text-muted-foreground">Zone</th>}
               </tr>
             </thead>
             <tbody>
@@ -1772,15 +1795,21 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
                 const rawCode = (codeCol ? row[codeCol] : "") || "";
                 const { code, reason } = splitCodeAndReason(rawCode);
                 const desc = (descCol ? row[descCol] : "") || reason;
+                const zone = zoneCol ? row[zoneCol] : "";
 
                 return (
                   <tr key={i} className="border-t border-border hover:bg-muted/30">
                     <td className="px-3 py-1.5 font-mono font-medium w-32">
                       {code || <span className="opacity-30">—</span>}
                     </td>
-                    <td className="px-3 py-1.5 max-w-[300px] truncate">
+                    <td className="px-3 py-1.5 max-w-[240px] truncate">
                       {desc || <span className="opacity-30">—</span>}
                     </td>
+                    {zoneCol && (
+                      <td className="px-3 py-1.5 max-w-[160px] truncate text-muted-foreground">
+                        {zone || <span className="opacity-30">—</span>}
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -1793,6 +1822,7 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
     if (importType === "rework-types") {
       const codeCol = cm.reworkCode ?? cm.rejectionCode ?? section.allHeaders[0];
       const descCol = cm.description;
+      const zoneCol = cm.zone;
 
       return (
         <div className="overflow-x-auto rounded border border-border">
@@ -1801,21 +1831,28 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
               <tr className="bg-muted/60">
                 <th className="px-3 py-2 text-left font-medium text-muted-foreground">Rework Code</th>
                 <th className="px-3 py-2 text-left font-medium text-muted-foreground">Reason / Description</th>
+                {zoneCol && <th className="px-3 py-2 text-left font-medium text-muted-foreground">Zone</th>}
               </tr>
             </thead>
             <tbody>
               {rows.map((row, i) => {
                 const code = (codeCol ? row[codeCol] : "") || "";
                 const desc = (descCol ? row[descCol] : "") || "";
+                const zone = zoneCol ? row[zoneCol] : "";
 
                 return (
                   <tr key={i} className="border-t border-border hover:bg-muted/30">
                     <td className="px-3 py-1.5 font-mono font-medium w-36">
                       {code || <span className="opacity-30">—</span>}
                     </td>
-                    <td className="px-3 py-1.5 max-w-[300px] truncate">
+                    <td className="px-3 py-1.5 max-w-[240px] truncate">
                       {desc || <span className="opacity-30">—</span>}
                     </td>
+                    {zoneCol && (
+                      <td className="px-3 py-1.5 max-w-[160px] truncate text-muted-foreground">
+                        {zone || <span className="opacity-30">—</span>}
+                      </td>
+                    )}
                   </tr>
                 );
               })}
