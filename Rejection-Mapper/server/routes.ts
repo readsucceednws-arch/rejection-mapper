@@ -47,91 +47,6 @@ interface ImportState {
 
 const activeImports = new Map<string, ImportState>();
 
-// ─── RESUME CHECKPOINT HELPERS (DB-backed, survives server restarts) ─────────
-//
-// The fingerprint is a fast stable hash of the file's content:
-//   - total row count
-//   - a sample of cell values spread evenly across the file
-// We avoid JSON.stringify of full rows because XLSX can re-parse the same file
-// with slightly different whitespace or number formatting on a second upload.
-
-function computeFingerprint(rows: Record<string, any>[]): string {
-  const total = rows.length;
-  if (total === 0) return "empty";
-
-  // Sample up to 12 rows spread evenly: first, last, and 10 in between
-  const indices = new Set<number>([0, total - 1]);
-  if (total > 2) {
-    const step = Math.max(1, Math.floor(total / 10));
-    for (let i = step; i < total - 1; i += step) indices.add(i);
-  }
-
-  // For each sampled row, take every cell value, normalise it, and concat
-  const parts: string[] = [`n=${total}`];
-  for (const idx of [...indices].sort((a, b) => a - b)) {
-    const row = rows[idx];
-    const vals = Object.values(row)
-      .map(v => String(v ?? "").trim().toLowerCase().replace(/\s+/g, " "))
-      .join("|");
-    parts.push(`r${idx}:${vals}`);
-  }
-
-  // Simple but collision-resistant djb2 hash over the combined string
-  const str = parts.join(";");
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
-    hash = hash >>> 0; // keep as 32-bit unsigned
-  }
-  return `${total}-${hash.toString(16)}`;
-}
-
-async function loadCheckpoint(orgId: number, fingerprint: string): Promise<{ resumeFromRow: number; successfulImports: number } | null> {
-  try {
-    const { pool } = await import("./db");
-    const result = await pool.query(
-      `SELECT resume_from_row, successful_imports FROM import_checkpoints
-       WHERE organization_id = $1 AND fingerprint = $2 LIMIT 1`,
-      [orgId, fingerprint]
-    );
-    if (result.rows.length === 0) return null;
-    return {
-      resumeFromRow: result.rows[0].resume_from_row,
-      successfulImports: result.rows[0].successful_imports,
-    };
-  } catch (err) {
-    console.error("[import] Failed to load checkpoint:", err);
-    return null;
-  }
-}
-
-async function saveCheckpoint(orgId: number, fingerprint: string, resumeFromRow: number, successfulImports: number): Promise<void> {
-  try {
-    const { pool } = await import("./db");
-    await pool.query(
-      `INSERT INTO import_checkpoints (organization_id, fingerprint, resume_from_row, successful_imports)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (organization_id, fingerprint)
-       DO UPDATE SET resume_from_row = $3, successful_imports = $4, created_at = now()`,
-      [orgId, fingerprint, resumeFromRow, successfulImports]
-    );
-  } catch (err) {
-    console.error("[import] Failed to save checkpoint:", err);
-  }
-}
-
-async function clearCheckpoint(orgId: number, fingerprint: string): Promise<void> {
-  try {
-    const { pool } = await import("./db");
-    await pool.query(
-      `DELETE FROM import_checkpoints WHERE organization_id = $1 AND fingerprint = $2`,
-      [orgId, fingerprint]
-    );
-  } catch (err) {
-    console.error("[import] Failed to clear checkpoint:", err);
-  }
-}
-
 function generateImportId(): string {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 }
@@ -1136,37 +1051,16 @@ export async function registerRoutes(
       return res.status(400).json({ message: "No rows provided", importId });
     }
 
-    // ── Resume logic ─────────────────────────────────────────────────────────
-    // Compute a stable fingerprint server-side (client no longer sends it).
-    // Then check the DB for a saved checkpoint for this file + org combination.
-    const fileFingerprint = dryRun ? null : computeFingerprint(rows);
-    let startFromRow = 0;
-    let priorSuccessful = 0;
-
-    if (fileFingerprint) {
-      const checkpoint = await loadCheckpoint(orgId, fileFingerprint);
-      if (checkpoint && checkpoint.resumeFromRow > 0 && checkpoint.resumeFromRow < rows.length) {
-        startFromRow    = checkpoint.resumeFromRow;
-        priorSuccessful = checkpoint.successfulImports;
-      }
-    }
-
     // Respond immediately with the importId — client polls for progress
-    importState.totalRows         = rows.length;
-    importState.status            = "running";
-    importState.processedRows     = startFromRow;
-    importState.successfulImports = priorSuccessful;
-    const resumingMsg = startFromRow > 0
-      ? `Resuming from row ${startFromRow + 1} of ${rows.length} (${priorSuccessful} already imported)...`
-      : `Starting import of ${rows.length} rows...`;
-    importState.message = resumingMsg;
-    res.status(202).json({ importId, totalRows: rows.length, resumedFromRow: startFromRow, message: resumingMsg });
+    importState.totalRows = rows.length;
+    importState.status = "running";
+    importState.message = `Starting import of ${rows.length} rows...`;
+    res.status(202).json({ importId, totalRows: rows.length, message: "Import started" });
 
     // --- BACKGROUND PROCESSING (runs after response is sent) ---
     const logger = new ImportLogger();
     const summary = createEmptySummary();
     summary.totalRows = rows.length;
-    summary.successfulImports = priorSuccessful; // carry over already-imported rows
 
     try {
       logger.info(`Starting import of ${rows.length} rows`, { dryRun: !!dryRun, importId });
@@ -1198,20 +1092,14 @@ export async function registerRoutes(
         existingZones.map(z => [normalizeForMatching(z.name), z])
       );
 
-      // Process each row — start from checkpoint if resuming
-      for (let rowIndex = startFromRow; rowIndex < rows.length; rowIndex++) {
+      // Process each row
+      for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
         // Check if import was cancelled
         if (importState.cancelled) {
           logger.warn(`Import cancelled by user at row ${rowIndex + 1}`);
           importState.status = "cancelled";
           importState.message = `Cancelled at row ${rowIndex + 1}. ${summary.successfulImports} of ${summary.totalRows} rows imported.`;
           importState.result = { success: false, cancelled: true, summary, logs: logger.getLogs() };
-
-          // Persist checkpoint to DB so the same file resumes here on next upload
-          if (fileFingerprint) {
-            await saveCheckpoint(orgId, fileFingerprint, rowIndex, summary.successfulImports);
-          }
-
           activeImports.delete(importId);
           return;
         }
@@ -1243,11 +1131,34 @@ export async function registerRoutes(
           const dateStr = normalizeText(getField("Date", "Entry Date", "entry_date", "LogDate", "Transaction Date"));
           const partNumber = normalizeText(getField("Part Number", "part_number", "Part No", "PN", "Part", "Item", "Item Name", "Component"));
           const typeField = normalizeText(getField("Type", "Entry Type", "Category", "Purpose", "purpose"));
-          const code = normalizeText(getField("Code", "Rejection Code", "Rework Code", "Reason", "RejectionCode", "ReworkCode", "ReasonCode"));
           const purpose = normalizeText(getField("Purpose", "process", "Description", "description", "Operation"));
           const zone = normalizeText(getField("Zone", "zone", "ZONE"));
           const quantityStr = normalizeText(getField("Quantity", "quantity", "Qty", "QTY", "Count", "Pieces")) || "1";
           const remarks = normalizeText(getField("Remarks", "remarks", "Notes", "notes", "Comment"));
+
+          // Read Code and Reason separately so we can build a meaningful composite.
+          // Excel often has a short zone code (Z1, Z2) in "Code" and the actual defect
+          // description (CHAMFER NG, DENT) in "Reason" / "Description".
+          const rawCode   = normalizeText(getField("Code", "Rejection Code", "Rework Code", "RejectionCode", "ReworkCode", "ReasonCode"));
+          const rawReason = normalizeText(getField("Reason", "reason", "Description", "description", "Defect", "defect"));
+
+          // Determine the best code to use:
+          //   • If rawCode is a short zone shorthand (≤4 chars, no spaces, like Z1/Z2/Z3/Z4/Z5/Z6)
+          //     AND rawReason is a meaningful description → use "rawCode-rawReason" as the code
+          //     so it becomes e.g. "Z1-CHAMFERNG" in the DB.
+          //   • If rawCode is already descriptive (BUFFING, PLATING-REWORK etc.) → use it as-is.
+          //   • If only rawReason is present → use that as the code.
+          const isZoneShorthand = /^Z\d{1,2}$/i.test(rawCode.trim());
+          let code: string;
+          if (isZoneShorthand && rawReason) {
+            // Combine: "Z1" + "CHAMFER NG" → "Z1-CHAMFER NG"
+            code = `${rawCode.toUpperCase()}-${rawReason}`;
+          } else if (rawCode) {
+            code = rawCode;
+          } else {
+            code = rawReason;
+          }
+          code = normalizeText(code);
 
           // Validate required fields
           if (isBlank(partNumber)) {
@@ -1552,12 +1463,6 @@ export async function registerRoutes(
       importState.successfulImports = summary.successfulImports;
       importState.failedRows = summary.failedRows.length;
       importState.processedRows = summary.totalRows;
-
-      // Clear any stored checkpoint for this file — it completed successfully
-      if (fileFingerprint) {
-        await clearCheckpoint(orgId, fileFingerprint);
-      }
-
       importState.result = {
         success: true,
         message: finalMsg,
