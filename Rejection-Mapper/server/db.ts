@@ -201,8 +201,7 @@ export async function initDb(): Promise<void> {
     ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "logged_by_user_id" integer REFERENCES "users"("id");
     ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text;
 
-    ALTER TABLE "rework_types" ADD COLUMN IF NOT EXISTS "zone" text;
-    ALTER TABLE "rejection_types" ADD COLUMN IF NOT EXISTS "zone" text;
+      ALTER TABLE "rework_types" ADD COLUMN IF NOT EXISTS "zone" text;
 
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "rate" double precision;
     ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "amount" double precision;
@@ -279,25 +278,6 @@ export async function initDb(): Promise<void> {
     WHERE "id" IN (
       SELECT MIN("id") FROM "users" WHERE "organization_id" IS NOT NULL GROUP BY "organization_id"
     ) AND "role" = 'employee';
-
-    -- Persists import resume checkpoints across server restarts.
-    -- fingerprint = stable hash of the file content (row count + sampled values).
-    -- Rows older than 48 hours are pruned on startup.
-    CREATE TABLE IF NOT EXISTS "import_checkpoints" (
-      "id"                  serial PRIMARY KEY,
-      "organization_id"     integer NOT NULL REFERENCES "organizations"("id") ON DELETE CASCADE,
-      "fingerprint"         text NOT NULL,
-      "resume_from_row"     integer NOT NULL,
-      "successful_imports"  integer NOT NULL DEFAULT 0,
-      "created_at"          timestamp NOT NULL DEFAULT now(),
-      UNIQUE ("organization_id", "fingerprint")
-    );
-    CREATE INDEX IF NOT EXISTS "IDX_import_checkpoints_org_fp"
-      ON "import_checkpoints" ("organization_id", "fingerprint");
-
-    -- Prune stale checkpoints (older than 48 hours) on every startup
-    DELETE FROM "import_checkpoints"
-    WHERE "created_at" < now() - interval '48 hours';
   `);
 
   // Run column additions individually so a failure in the block above
@@ -307,6 +287,13 @@ export async function initDb(): Promise<void> {
     `ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text`,
     `ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "logged_by_user_id" integer REFERENCES "users"("id")`,
     `ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text`,
+    // Fix existing rework types where reason was incorrectly set to the code value (e.g. reason="Z1")
+    // These are identified as entries where reason = reworkCode (no real description was stored)
+    // We cannot recover the real description from the DB alone, but we can at least mark them
+    // so they show as the code value rather than a meaningless duplicate.
+    // Re-importing the Excel will overwrite these with the correct reason values.
+    `UPDATE "rework_types" SET "reason" = "rework_code" WHERE "reason" IS NULL OR "reason" = ''`,
+    `UPDATE "rejection_types" SET "reason" = "rejection_code" WHERE "reason" IS NULL OR "reason" = ''`,
   ];
   for (const sql of columnMigrations) {
     try {
