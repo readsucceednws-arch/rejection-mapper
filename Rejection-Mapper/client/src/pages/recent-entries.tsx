@@ -1118,14 +1118,12 @@ export default function RecentEntries() {
         const quantity = parseInt(fuzzyFind(row, RE_QTY) || "1") || 1;
         const remarks = fuzzyFind(row, RE_REM);
 
-        // Build composite code: if Code is a zone shorthand (Z1/Z2 etc.) + Reason exists,
-        // combine them so "Z1" + "CHAMFER NG" becomes "Z1-CHAMFER NG"
+        // Code = Reason column (the actual defect description).
+        // Zone shorthand (Z1, Z2...) in the Code column is used only to infer zone.
         const _rawCodeOnly = fuzzyFind(row, new Set(["code", "rejectioncode", "reworkcode", "rwcode", "reasoncode", "typecode"]));
         const _rawReasonOnly = fuzzyFind(row, new Set(["reason", "description", "defect", "reworkreason", "rejectionreason"]));
-        const _isZone = /^Z\d{1,2}$/i.test(_rawCodeOnly.trim());
-        const codeOrReason = _isZone && _rawReasonOnly
-          ? `${_rawCodeOnly.toUpperCase()}-${_rawReasonOnly}`
-          : _rawCodeOnly || _rawReasonOnly || fuzzyFind(row, RE_CODE);
+        const _isZone = /^Z\d{1,2}(-\S+)?$/i.test(_rawCodeOnly.trim());
+        const codeOrReason = _rawReasonOnly || (!_isZone ? _rawCodeOnly : "") || fuzzyFind(row, RE_CODE);
 
         const norm = (v: string | null | undefined) =>
           (v ?? "").toLowerCase().replace(/\s+/g, " ").trim();
