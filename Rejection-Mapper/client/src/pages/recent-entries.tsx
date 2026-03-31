@@ -659,8 +659,7 @@ export default function RecentEntries() {
   const [fileInputKey, setFileInputKey] = useState(0); // increment to force-reset the file input
   const cancelImportRef = useRef(false); // set to true to stop the import loop mid-flight
   const isMountedRef = useRef(true);    // set to false on unmount to guard all state setters
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null); // main-thread poller
-  const activeImportIdRef = useRef<string | null>(null); // importId being polled right now
+  const workerRef = useRef<Worker | null>(null); // Web Worker for background-safe polling
   const { toast } = useToast();
 
   const { data: currentUser } = useUser();
@@ -891,11 +890,12 @@ export default function RecentEntries() {
     return () => {
       isMountedRef.current = false;
       cancelImportRef.current = true;
-      if (pollIntervalRef.current !== null) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
+      // Terminate the polling worker immediately on unmount
+      if (workerRef.current) {
+        workerRef.current.postMessage({ type: "STOP" });
+        workerRef.current.terminate();
+        workerRef.current = null;
       }
-      activeImportIdRef.current = null;
     };
   }, []);
 
@@ -930,10 +930,7 @@ export default function RecentEntries() {
     // ── 1. Fire the import on the server and get back an importId immediately ──
     // The server processes everything in the background — tab switches, screen
     // lock, and computer sleep will NOT interrupt it.
-    // The server computes a stable fingerprint itself and checks for a saved
-    // checkpoint — no fingerprint needs to be sent from the client.
     let importId: string;
-    let resumedFromRow = 0;
     try {
       const startRes = await fetch("/api/import-entries", {
         method: "POST",
@@ -947,14 +944,6 @@ export default function RecentEntries() {
       }
       const startData = await startRes.json();
       importId = startData.importId;
-      resumedFromRow = startData.resumedFromRow ?? 0;
-
-      if (resumedFromRow > 0) {
-        toast({
-          title: "Resuming import",
-          description: `Skipping first ${resumedFromRow} already-imported rows. Continuing from row ${resumedFromRow + 1} of ${rows.length}.`,
-        });
-      }
     } catch (err: any) {
       if (isMountedRef.current) {
         toast({ title: "Import Failed", description: err.message, variant: "destructive" });
@@ -964,45 +953,34 @@ export default function RecentEntries() {
       return;
     }
 
-    // ── 2. Poll progress on the main thread ─────────────────────────────────
-    // The import runs entirely on the server — the browser just needs to check
-    // in periodically. A plain setInterval is simpler and more reliable than a
-    // Web Worker (no CSP blob: issues, no module bundling quirks).
-    //
-    // When the tab is backgrounded, browsers throttle timers to ~1 min — but
-    // that is fine because the server keeps going regardless. We hook into
-    // visibilitychange so we poll immediately when the user returns to the tab,
-    // catching up on any missed progress updates instantly.
+    // ── 2. Spin up a Web Worker to poll progress ────────────────────────────
+    // Web Workers run in a separate thread that browsers do NOT throttle when
+    // the tab is backgrounded. The import itself runs on the server — the worker
+    // just checks in every 2.5s regardless of tab visibility.
     let pollCount = 0;
 
-    // Stop any previous poll
-    if (pollIntervalRef.current !== null) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
+    // Terminate any previous worker
+    if (workerRef.current) {
+      workerRef.current.terminate();
+      workerRef.current = null;
     }
-    activeImportIdRef.current = importId;
 
-    const stopPolling = () => {
-      if (pollIntervalRef.current !== null) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
-      activeImportIdRef.current = null;
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
+    const worker = new Worker(
+      new URL("../workers/importPoller.worker.ts", import.meta.url),
+      { type: "module" }
+    );
+    workerRef.current = worker;
 
-    const handlePollResponse = async (data: {
-      importId: string;
-      status: string;
-      totalRows: number;
-      processedRows: number;
-      successfulImports: number;
-      failedRows: number;
-      message: string;
-      result?: Record<string, any>;
-    }) => {
-      if (data.status === "running" || data.status === "pending") {
+    worker.onmessage = async (e: MessageEvent<{
+      type: "PROGRESS" | "DONE" | "ERROR";
+      data?: any;
+      message?: string;
+    }>) => {
+      const { type, data, message } = e.data;
+
+      if (type === "PROGRESS" && data) {
         pollCount++;
+        // Update the progress counter in the UI
         if (isMountedRef.current) {
           setImportProgress({
             processed: data.processedRows,
@@ -1012,16 +990,17 @@ export default function RecentEntries() {
             message: data.message,
           });
         }
-
-        // Refresh entries table every ~10 s so rows appear live
+        // Refresh the entries table every 4th message (~10s) so rows appear live
         if (pollCount % 4 === 0) {
           queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
           queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
         }
 
-        // User clicked Stop — cancel on server then clean up
+        // Check if user clicked Stop Import — send cancel to server and stop worker
         if (cancelImportRef.current) {
-          stopPolling();
+          worker.postMessage({ type: "STOP" });
+          worker.terminate();
+          workerRef.current = null;
           await fetch(`/api/import-entries/${importId}/cancel`, {
             method: "POST", credentials: "include",
           }).catch(() => {});
@@ -1038,55 +1017,51 @@ export default function RecentEntries() {
         return;
       }
 
-      // Import finished (done / failed / cancelled)
-      stopPolling();
+      // ── 3. Import finished (DONE / ERROR) ────────────────────────────────
+      worker.terminate();
+      workerRef.current = null;
+
       await queryClient.invalidateQueries({ queryKey: [api.rejectionEntries.list.path] });
       await queryClient.invalidateQueries({ queryKey: [api.reworkEntries.list.path] });
+
       if (!isMountedRef.current) return;
+
       setIsImporting(false);
       setImportProgress(null);
       resetFileInput();
 
-      if (data.status === "done") {
+      if (type === "ERROR") {
+        toast({ title: "Import Error", description: message || "Lost contact with server.", variant: "destructive" });
+        return;
+      }
+
+      if (data?.status === "done") {
         const r = data.result;
         toast({
-          title: r?.summary?.successfulImports > 0 ? "Import Complete" : "Import Finished",
+          title: r?.summary?.successfulImports > 0 ? "Import Complete" : "Import Failed",
           description: r?.message || data.message,
           variant: r?.summary?.successfulImports > 0 ? "default" : "destructive",
         });
-      } else if (data.status === "cancelled") {
+      } else if (data?.status === "cancelled") {
         toast({ title: "Import Stopped", description: data.message });
       } else {
-        toast({ title: "Import Failed", description: data.message || "Unknown error", variant: "destructive" });
+        toast({ title: "Import Failed", description: data?.message || "Unknown error", variant: "destructive" });
       }
     };
 
-    const poll = async () => {
-      if (!activeImportIdRef.current) return;
-      try {
-        const res = await fetch(`/api/import-entries/${activeImportIdRef.current}/progress`, {
-          credentials: "include",
-        });
-        if (!res.ok) return; // silently retry next tick
-        const data = await res.json();
-        await handlePollResponse(data);
-      } catch {
-        // Network blip — silently retry
+    worker.onerror = () => {
+      worker.terminate();
+      workerRef.current = null;
+      if (isMountedRef.current) {
+        toast({ title: "Import Error", description: "Worker failed unexpectedly.", variant: "destructive" });
+        setIsImporting(false);
+        setImportProgress(null);
+        resetFileInput();
       }
     };
 
-    // Poll immediately, then every 2.5 s
-    poll();
-    pollIntervalRef.current = setInterval(poll, 2500);
-
-    // When the user comes back to this tab, poll immediately instead of waiting
-    // for the next interval tick (which may be up to 60s if throttled).
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible" && activeImportIdRef.current) {
-        poll();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    // Start the worker
+    worker.postMessage({ type: "START", importId, pollInterval: 2500 });
   };
 
     const handleGSheetImport = async () => {
@@ -1140,9 +1115,17 @@ export default function RecentEntries() {
         }
 
         const partNumber = fuzzyFind(row, RE_PART);
-        const codeOrReason = fuzzyFind(row, RE_CODE);
         const quantity = parseInt(fuzzyFind(row, RE_QTY) || "1") || 1;
         const remarks = fuzzyFind(row, RE_REM);
+
+        // Build composite code: if Code is a zone shorthand (Z1/Z2 etc.) + Reason exists,
+        // combine them so "Z1" + "CHAMFER NG" becomes "Z1-CHAMFER NG"
+        const _rawCodeOnly = fuzzyFind(row, new Set(["code", "rejectioncode", "reworkcode", "rwcode", "reasoncode", "typecode"]));
+        const _rawReasonOnly = fuzzyFind(row, new Set(["reason", "description", "defect", "reworkreason", "rejectionreason"]));
+        const _isZone = /^Z\d{1,2}$/i.test(_rawCodeOnly.trim());
+        const codeOrReason = _isZone && _rawReasonOnly
+          ? `${_rawCodeOnly.toUpperCase()}-${_rawReasonOnly}`
+          : _rawCodeOnly || _rawReasonOnly || fuzzyFind(row, RE_CODE);
 
         const norm = (v: string | null | undefined) =>
           (v ?? "").toLowerCase().replace(/\s+/g, " ").trim();
