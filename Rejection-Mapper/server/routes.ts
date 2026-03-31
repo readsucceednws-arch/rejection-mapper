@@ -1132,33 +1132,55 @@ export async function registerRoutes(
           const partNumber = normalizeText(getField("Part Number", "part_number", "Part No", "PN", "Part", "Item", "Item Name", "Component"));
           const typeField = normalizeText(getField("Type", "Entry Type", "Category", "Purpose", "purpose"));
           const purpose = normalizeText(getField("Purpose", "process", "Description", "description", "Operation"));
-          const zone = normalizeText(getField("Zone", "zone", "ZONE"));
           const quantityStr = normalizeText(getField("Quantity", "quantity", "Qty", "QTY", "Count", "Pieces")) || "1";
           const remarks = normalizeText(getField("Remarks", "remarks", "Notes", "notes", "Comment"));
 
-          // Read Code and Reason separately so we can build a meaningful composite.
-          // Excel often has a short zone code (Z1, Z2) in "Code" and the actual defect
-          // description (CHAMFER NG, DENT) in "Reason" / "Description".
+          // Read Code and Reason columns separately.
+          // In this Excel format:
+          //   "Code" column  = zone shorthand (Z1, Z2, Z3...) — used to determine zone
+          //   "Reason" column = the actual defect/rework description (CHAMFER NG, BUFFING) — used as the code
           const rawCode   = normalizeText(getField("Code", "Rejection Code", "Rework Code", "RejectionCode", "ReworkCode", "ReasonCode"));
           const rawReason = normalizeText(getField("Reason", "reason", "Description", "description", "Defect", "defect"));
+          const rawZone   = normalizeText(getField("Zone", "zone", "ZONE"));
 
-          // Determine the best code to use:
-          //   • If rawCode is a short zone shorthand (≤4 chars, no spaces, like Z1/Z2/Z3/Z4/Z5/Z6)
-          //     AND rawReason is a meaningful description → use "rawCode-rawReason" as the code
-          //     so it becomes e.g. "Z1-CHAMFERNG" in the DB.
-          //   • If rawCode is already descriptive (BUFFING, PLATING-REWORK etc.) → use it as-is.
-          //   • If only rawReason is present → use that as the code.
-          const isZoneShorthand = /^Z\d{1,2}$/i.test(rawCode.trim());
+          // Zone shorthand → full zone name mapping (from your Excel data)
+          const ZONE_MAP: Record<string, string> = {
+            "Z1": "ZONE 1 - TRAUB",
+            "Z2": "ZONE 2",
+            "Z3": "ZONE 3",
+            "Z4": "ZONE 4 - CNC",
+            "Z4-CONCENTRICITY": "ZONE 4 - CNC",
+            "Z4-MILLING": "ZONE 4 - CNC",
+            "Z5": "ZONE 5 - PLATING",
+            "Z6": "RM SUPPLIER",
+            "Z7": "ZONE 7",
+            "Z8": "ZONE 8",
+            "Z9": "ZONE 9",
+          };
+
+          const isZoneShorthand = /^Z\d{1,2}(-\S+)?$/i.test(rawCode.trim());
+
+          // Code = Reason column (the actual defect description)
+          // Fall back to rawCode only if Reason is blank and rawCode is not a zone shorthand
           let code: string;
-          if (isZoneShorthand && rawReason) {
-            // Combine: "Z1" + "CHAMFER NG" → "Z1-CHAMFER NG"
-            code = `${rawCode.toUpperCase()}-${rawReason}`;
-          } else if (rawCode) {
+          if (rawReason) {
+            code = rawReason;
+          } else if (!isZoneShorthand && rawCode) {
             code = rawCode;
           } else {
-            code = rawReason;
+            code = rawReason || rawCode;
           }
           code = normalizeText(code);
+
+          // Zone = Zone column if present; otherwise infer from zone shorthand in Code column
+          let zone: string;
+          if (rawZone) {
+            zone = rawZone;
+          } else if (isZoneShorthand) {
+            zone = ZONE_MAP[rawCode.toUpperCase()] || rawCode.toUpperCase();
+          } else {
+            zone = "";
+          }
 
           // Validate required fields
           if (isBlank(partNumber)) {
@@ -1267,7 +1289,7 @@ export async function registerRoutes(
               if (!dryRun) {
                 reworkType = await storage.createReworkType({
                   reworkCode: normalizedCode,
-                  reason: purpose || normalizedCode,
+                  reason: rawReason || purpose || normalizedCode,
                   zone: zone || null,
                   organizationId: orgId,
                 });
@@ -1277,7 +1299,7 @@ export async function registerRoutes(
                 reworkType = {
                   id: -1,
                   reworkCode: normalizedCode,
-                  reason: purpose || normalizedCode,
+                  reason: rawReason || purpose || normalizedCode,
                   zone: zone || null,
                   organizationId: orgId,
                 };
@@ -1355,7 +1377,7 @@ export async function registerRoutes(
               if (!dryRun) {
                 rejectionType = await storage.createRejectionType({
                   rejectionCode: normalizedCode,
-                  reason: purpose || normalizedCode,
+                  reason: rawReason || purpose || normalizedCode,
                   type: "rejection",
                   organizationId: orgId,
                 });
@@ -1365,7 +1387,7 @@ export async function registerRoutes(
                 rejectionType = {
                   id: -1,
                   rejectionCode: normalizedCode,
-                  reason: purpose || normalizedCode,
+                  reason: rawReason || purpose || normalizedCode,
                   type: "rejection",
                   organizationId: orgId,
                 };
