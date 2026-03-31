@@ -33,6 +33,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 const reworkTypeFormSchema = z.object({
   reworkCode: z.string().min(1, "Rework code is required"),
+  reason: z.string().optional(),
   zone: z.string().optional(),
 });
 
@@ -64,7 +65,14 @@ function ReworkTypeForm({
         <FormField control={form.control} name="reworkCode" render={({ field }) => (
           <FormItem>
             <FormLabel>Rework Code *</FormLabel>
-            <FormControl><Input placeholder="e.g. RW-001" {...field} data-testid="input-rework-code" /></FormControl>
+            <FormControl><Input placeholder="e.g. BUFFING, PLATING-REWORK" {...field} data-testid="input-rework-code" /></FormControl>
+            <FormMessage />
+          </FormItem>
+        )} />
+        <FormField control={form.control} name="reason" render={({ field }) => (
+          <FormItem>
+            <FormLabel>Description <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+            <FormControl><Input placeholder="e.g. Surface buffing process" {...field} data-testid="input-rework-reason" /></FormControl>
             <FormMessage />
           </FormItem>
         )} />
@@ -158,7 +166,7 @@ export default function ManageReworkTypes() {
   };
 
   const handleCreate = (data: FormValues) => {
-    createMutation.mutate({ ...data, reason: data.reworkCode }, {
+    createMutation.mutate({ ...data, reason: data.reason || data.reworkCode }, {
       onSuccess: () => {
         toast({ title: "Rework Created", description: "Successfully added new rework code." });
         setIsAddOpen(false);
@@ -169,7 +177,7 @@ export default function ManageReworkTypes() {
 
   const handleUpdate = (data: FormValues) => {
     if (!editType) return;
-    updateMutation.mutate({ id: editType.id, data: { ...data, reason: data.reworkCode } }, {
+    updateMutation.mutate({ id: editType.id, data: { ...data, reason: data.reason || data.reworkCode } }, {
       onSuccess: () => {
         toast({ title: "Rework Updated", description: "Changes have been saved." });
         setEditType(null);
@@ -235,7 +243,7 @@ export default function ManageReworkTypes() {
                   <DialogDescription>Create a new rework code for logging entries.</DialogDescription>
                 </DialogHeader>
                 <ReworkTypeForm
-                  defaultValues={{ reworkCode: "", zone: "" }}
+                  defaultValues={{ reworkCode: "", reason: "", zone: "" }}
                   onSubmit={handleCreate}
                   isPending={createMutation.isPending}
                   onCancel={() => setIsAddOpen(false)}
@@ -272,6 +280,7 @@ export default function ManageReworkTypes() {
                   </TableHead>
                 )}
                 <TableHead>Rework Code</TableHead>
+                <TableHead>Description</TableHead>
                 <TableHead>Zone</TableHead>
                 <TableHead className="w-[80px]"></TableHead>
               </TableRow>
@@ -308,6 +317,7 @@ export default function ManageReworkTypes() {
                       </TableCell>
                     )}
                     <TableCell className="font-mono font-medium">{t.reworkCode}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{t.reason !== t.reworkCode ? t.reason : "—"}</TableCell>
                     <TableCell>
                       {t.zone ? (
                         <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">
@@ -348,7 +358,7 @@ export default function ManageReworkTypes() {
           </DialogHeader>
           {editType && (
             <ReworkTypeForm
-              defaultValues={{ reworkCode: editType.reworkCode, zone: editType.zone || "" }}
+              defaultValues={{ reworkCode: editType.reworkCode, reason: editType.reason || "", zone: editType.zone || "" }}
               onSubmit={handleUpdate}
               isPending={updateMutation.isPending}
               onCancel={() => setEditType(null)}
