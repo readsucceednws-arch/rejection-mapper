@@ -1621,8 +1621,7 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
                 {
                   rejectionCode: code,
                   reason: reason || code,
-                  type: "rejection",
-                  ...(rawZone ? { zone: rawZone } : {}),
+                  type: rawZone || "rejection",
                 },
                 {
                   onSuccess: (t) => resolve(t),
@@ -1686,7 +1685,7 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
                 {
                   reworkCode: code,
                   reason: reason || "",
-                  ...(rawZone ? { zone: rawZone } : {}),
+                  zone: rawZone || undefined,
                 },
                 {
                   onSuccess: (t) => resolve(t),
