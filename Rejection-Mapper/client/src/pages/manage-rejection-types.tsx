@@ -165,7 +165,7 @@ export default function ManageRejectionTypes() {
   };
 
   const handleCreate = (data: FormValues) => {
-    createMutation.mutate({ ...data, reason: data.rejectionCode }, {
+    createMutation.mutate({ ...data, reason: data.reason || data.rejectionCode }, {
       onSuccess: () => {
         toast({ title: "Type Created", description: "Successfully added new rejection type." });
         setIsAddOpen(false);
@@ -176,7 +176,7 @@ export default function ManageRejectionTypes() {
 
   const handleUpdate = (data: FormValues) => {
     if (!editType) return;
-    updateMutation.mutate({ id: editType.id, data: { ...data, reason: data.rejectionCode } }, {
+    updateMutation.mutate({ id: editType.id, data: { ...data, reason: data.reason || data.rejectionCode } }, {
       onSuccess: () => {
         toast({ title: "Type Updated", description: "Changes have been saved." });
         setEditType(null);
