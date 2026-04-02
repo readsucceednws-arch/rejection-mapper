@@ -917,6 +917,121 @@ export async function registerRoutes(
     }
   });
 
+  // --- FIX ZONE-SHORTHAND REWORK/REJECTION TYPES ---
+  // Finds types where reworkCode/rejectionCode is a zone shorthand (Z1, Z2 etc.)
+  // and renames them to use their reason field as the code instead.
+  // This fixes records imported before the code/reason fix was applied.
+  app.post("/api/fix-zone-codes", isAdmin, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { dryRun } = req.body as { dryRun?: boolean };
+      const { pool } = await import("./db");
+
+      // Find rework types where code looks like a zone shorthand
+      const rwBadQuery = `
+        SELECT id, rework_code, reason, zone
+        FROM rework_types
+        WHERE organization_id = $1
+          AND rework_code ~ '^Z[0-9]{1,2}(-\S+)?$'
+      `;
+      const rejBadQuery = `
+        SELECT id, rejection_code, reason, zone
+        FROM rejection_types
+        WHERE organization_id = $1
+          AND rejection_code ~ '^Z[0-9]{1,2}(-\S+)?$'
+      `;
+
+      const rwBad = await pool.query(rwBadQuery, [orgId]);
+      const rejBad = await pool.query(rejBadQuery, [orgId]);
+
+      if (dryRun) {
+        return res.json({
+          dryRun: true,
+          reworkToFix: rwBad.rows.length,
+          rejectionToFix: rejBad.rows.length,
+          samples: [...rwBad.rows.slice(0, 5), ...rejBad.rows.slice(0, 5)],
+          message: `Found ${rwBad.rows.length + rejBad.rows.length} zone-shorthand codes to fix.`,
+        });
+      }
+
+      // Zone shorthand → full zone name
+      const ZONE_MAP: Record<string, string> = {
+        "Z1": "ZONE 1 - TRAUB",
+        "Z2": "ZONE 2",
+        "Z3": "ZONE 3",
+        "Z4": "ZONE 4 - CNC",
+        "Z5": "ZONE 5 - PLATING",
+        "Z6": "RM SUPPLIER",
+      };
+
+      let rwFixed = 0;
+      for (const row of rwBad.rows) {
+        const newCode = row.reason && row.reason !== row.rework_code
+          ? row.reason  // Use existing reason as the new code
+          : row.rework_code; // No real reason, keep as-is
+        const newZone = row.zone || ZONE_MAP[row.rework_code.toUpperCase().split("-")[0]] || row.rework_code;
+
+        // Check if a type with the new code already exists
+        const existing = await pool.query(
+          `SELECT id FROM rework_types WHERE organization_id = $1 AND rework_code = $2 AND id != $3`,
+          [orgId, newCode, row.id]
+        );
+
+        if (existing.rows.length > 0) {
+          // Merge: update entries to point to the existing type, then delete this one
+          await pool.query(
+            `UPDATE rework_entries SET rework_type_id = $1 WHERE rework_type_id = $2`,
+            [existing.rows[0].id, row.id]
+          );
+          await pool.query(`DELETE FROM rework_types WHERE id = $1`, [row.id]);
+        } else {
+          await pool.query(
+            `UPDATE rework_types SET rework_code = $1, reason = $2, zone = $3 WHERE id = $4`,
+            [newCode, newCode, newZone, row.id]
+          );
+        }
+        rwFixed++;
+      }
+
+      let rejFixed = 0;
+      for (const row of rejBad.rows) {
+        const newCode = row.reason && row.reason !== row.rejection_code
+          ? row.reason
+          : row.rejection_code;
+        const newZone = row.zone || ZONE_MAP[row.rejection_code.toUpperCase().split("-")[0]] || row.rejection_code;
+
+        const existing = await pool.query(
+          `SELECT id FROM rejection_types WHERE organization_id = $1 AND rejection_code = $2 AND id != $3`,
+          [orgId, newCode, row.id]
+        );
+
+        if (existing.rows.length > 0) {
+          await pool.query(
+            `UPDATE rejection_entries SET rejection_type_id = $1 WHERE rejection_type_id = $2`,
+            [existing.rows[0].id, row.id]
+          );
+          await pool.query(`DELETE FROM rejection_types WHERE id = $1`, [row.id]);
+        } else {
+          await pool.query(
+            `UPDATE rejection_types SET rejection_code = $1, reason = $2 WHERE id = $3`,
+            [newCode, newCode, row.id]
+          );
+        }
+        rejFixed++;
+      }
+
+      res.json({
+        success: true,
+        reworkFixed: rwFixed,
+        rejectionFixed: rejFixed,
+        message: `Fixed ${rwFixed + rejFixed} zone-shorthand codes (${rwFixed} rework, ${rejFixed} rejection).`,
+      });
+    } catch (err: any) {
+      console.error("[fix-zone-codes]", err);
+      res.status(500).json({ message: err.message || "Fix failed" });
+    }
+  });
+
   // --- DEDUPLICATE EXISTING ENTRIES ---
   // Finds and removes duplicate entries (same org + part + type + quantity + calendar day)
   // keeping the earliest (lowest id) of each group.
@@ -1270,7 +1385,10 @@ export async function registerRoutes(
           }
 
           // Get or create rejection/rework type
+          // normalizedCode is used only for MAP LOOKUP (matching existing types).
+          // storedCode is the human-readable version stored in the DB (preserves spaces/case).
           const normalizedCode = normalizeCode(code);
+          const storedCode = code.trim().toUpperCase(); // e.g. "CHAMFER NG", "PLATING-REWORK"
 
           if (isRework) {
             let reworkType = reworkCodeMap.get(normalizedCode);
@@ -1284,12 +1402,23 @@ export async function registerRoutes(
                 }
               }
             }
+            // Also try matching by rawReason directly (catches old entries stored as "Z1" 
+            // where reason="CHAMFER NG" — we match the new code against the stored reason)
+            if (!reworkType && rawReason) {
+              const reasonNorm = normalizeCode(rawReason);
+              for (const [, v] of reworkCodeMap.entries()) {
+                if (normalizeCode(v.reason) === reasonNorm || normalizeCode(v.reworkCode) === reasonNorm) {
+                  reworkType = v;
+                  break;
+                }
+              }
+            }
             if (!reworkType) {
-              logger.info(`Creating new rework type: ${normalizedCode}`);
+              logger.info(`Creating new rework type: ${storedCode}`);
               if (!dryRun) {
                 reworkType = await storage.createReworkType({
-                  reworkCode: normalizedCode,
-                  reason: rawReason || purpose || normalizedCode,
+                  reworkCode: storedCode,
+                  reason: rawReason || purpose || storedCode,
                   zone: zone || null,
                   organizationId: orgId,
                 });
@@ -1298,8 +1427,8 @@ export async function registerRoutes(
               } else {
                 reworkType = {
                   id: -1,
-                  reworkCode: normalizedCode,
-                  reason: rawReason || purpose || normalizedCode,
+                  reworkCode: storedCode,
+                  reason: rawReason || purpose || storedCode,
                   zone: zone || null,
                   organizationId: orgId,
                 };
@@ -1372,12 +1501,21 @@ export async function registerRoutes(
                 }
               }
             }
+            if (!rejectionType && rawReason) {
+              const reasonNorm = normalizeCode(rawReason);
+              for (const [, v] of rejectionCodeMap.entries()) {
+                if (normalizeCode(v.reason) === reasonNorm || normalizeCode(v.rejectionCode) === reasonNorm) {
+                  rejectionType = v;
+                  break;
+                }
+              }
+            }
             if (!rejectionType) {
-              logger.info(`Creating new rejection type: ${normalizedCode}`);
+              logger.info(`Creating new rejection type: ${storedCode}`);
               if (!dryRun) {
                 rejectionType = await storage.createRejectionType({
-                  rejectionCode: normalizedCode,
-                  reason: rawReason || purpose || normalizedCode,
+                  rejectionCode: storedCode,
+                  reason: rawReason || purpose || storedCode,
                   type: "rejection",
                   organizationId: orgId,
                 });
@@ -1386,8 +1524,8 @@ export async function registerRoutes(
               } else {
                 rejectionType = {
                   id: -1,
-                  rejectionCode: normalizedCode,
-                  reason: rawReason || purpose || normalizedCode,
+                  rejectionCode: storedCode,
+                  reason: rawReason || purpose || storedCode,
                   type: "rejection",
                   organizationId: orgId,
                 };
