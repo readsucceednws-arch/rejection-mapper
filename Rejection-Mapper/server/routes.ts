@@ -1254,26 +1254,65 @@ export async function registerRoutes(
           // In this Excel format:
           //   "Code" column  = zone shorthand (Z1, Z2, Z3...) — used to determine zone
           //   "Reason" column = the actual defect/rework description (CHAMFER NG, BUFFING) — used as the code
-          const rawCode   = normalizeText(getField("Code", "Rejection Code", "Rework Code", "RejectionCode", "ReworkCode", "ReasonCode"));
-          const rawReason = normalizeText(getField("Reason", "reason", "Description", "description", "Defect", "defect"));
-          const rawZone   = normalizeText(getField("Zone", "zone", "ZONE"));
+          // Read Code and Reason columns separately
+const rawCode   = normalizeText(getField("Code", "Rejection Code", "Rework Code", "RejectionCode", "ReworkCode", "ReasonCode"));
+const rawReason = normalizeText(getField("Reason", "reason", "Description", "description", "Defect", "defect"));
+const rawZone   = normalizeText(getField("Zone", "zone", "ZONE"));
 
-          // Zone shorthand → full zone name mapping (from your Excel data)
-          const ZONE_MAP: Record<string, string> = {
-            "Z1": "ZONE 1 - TRAUB",
-            "Z2": "ZONE 2",
-            "Z3": "ZONE 3",
-            "Z4": "ZONE 4 - CNC",
-            "Z4-CONCENTRICITY": "ZONE 4 - CNC",
-            "Z4-MILLING": "ZONE 4 - CNC",
-            "Z5": "ZONE 5 - PLATING",
-            "Z6": "RM SUPPLIER",
-            "Z7": "ZONE 7",
-            "Z8": "ZONE 8",
-            "Z9": "ZONE 9",
-          };
+// Zone shorthand → full zone name mapping
+const ZONE_MAP: Record<string, string> = {
+  "Z1": "ZONE 1 - TRAUB",
+  "Z2": "ZONE 2",
+  "Z3": "ZONE 3",
+  "Z4": "ZONE 4 - CNC",
+  "Z4-CONCENTRICITY": "ZONE 4 - CNC",
+  "Z4-MILLING": "ZONE 4 - CNC",
+  "Z5": "ZONE 5 - PLATING",
+  "Z6": "RM SUPPLIER",
+  "Z7": "ZONE 7",
+  "Z8": "ZONE 8",
+  "Z9": "ZONE 9",
+};
 
-          const isZoneShorthand = /^Z\d{1,2}(-\S+)?$/i.test(rawCode.trim());
+// Detect shorthand like Z1
+const isZoneShorthand = /^Z\d{1,2}(-\S+)?$/i.test(rawCode.trim());
+
+// =======================
+// ✅ FIXED CODE LOGIC
+// =======================
+let code: string;
+
+if (rawReason) {
+  code = rawReason;
+} else if (!isZoneShorthand && rawCode) {
+  code = rawCode;
+} else {
+  code = ""; // prevents Z1 being stored as code
+}
+
+code = normalizeText(code);
+
+// =======================
+// ✅ FIXED ZONE LOGIC
+// =======================
+let zone: string;
+
+if (rawZone) {
+  // Extract Z1 from "Z1 traub"
+  const zoneKey = rawZone.split(/[\s-]/)[0].toUpperCase();
+
+  if (ZONE_MAP[zoneKey]) {
+    zone = ZONE_MAP[zoneKey];
+  } else {
+    zone = rawZone.trim();
+  }
+
+} else if (isZoneShorthand) {
+  const zoneKey = rawCode.toUpperCase().split("-")[0];
+  zone = ZONE_MAP[zoneKey] || zoneKey;
+} else {
+  zone = "";
+}
 
           // Code = Reason column (the actual defect description)
           // Fall back to rawCode only if Reason is blank and rawCode is not a zone shorthand
