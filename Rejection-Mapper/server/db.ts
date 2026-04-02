@@ -287,11 +287,24 @@ export async function initDb(): Promise<void> {
     `ALTER TABLE "rejection_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text`,
     `ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "logged_by_user_id" integer REFERENCES "users"("id")`,
     `ALTER TABLE "rework_entries" ADD COLUMN IF NOT EXISTS "created_by_username" text`,
-    // Fix existing rework types where reason was incorrectly set to the code value (e.g. reason="Z1")
-    // These are identified as entries where reason = reworkCode (no real description was stored)
-    // We cannot recover the real description from the DB alone, but we can at least mark them
-    // so they show as the code value rather than a meaningless duplicate.
-    // Re-importing the Excel will overwrite these with the correct reason values.
+    // Fix existing rework types where the code is a zone shorthand (Z1, Z2...)
+    // and the reason contains the real description — promote reason to be the code.
+    // This corrects old imports done before the Z1→CHAMFER NG fix.
+    `UPDATE "rework_types"
+       SET "rework_code" = UPPER(TRIM("reason")),
+           "reason" = UPPER(TRIM("reason"))
+     WHERE "reason" IS NOT NULL
+       AND "reason" != ''
+       AND "reason" != "rework_code"
+       AND "rework_code" ~ '^Z[0-9]{1,2}$'`,
+    `UPDATE "rejection_types"
+       SET "rejection_code" = UPPER(TRIM("reason")),
+           "reason" = UPPER(TRIM("reason"))
+     WHERE "reason" IS NOT NULL
+       AND "reason" != ''
+       AND "reason" != "rejection_code"
+       AND "rejection_code" ~ '^Z[0-9]{1,2}$'`,
+    // Ensure no null/empty reasons remain
     `UPDATE "rework_types" SET "reason" = "rework_code" WHERE "reason" IS NULL OR "reason" = ''`,
     `UPDATE "rejection_types" SET "reason" = "rejection_code" WHERE "reason" IS NULL OR "reason" = ''`,
   ];
