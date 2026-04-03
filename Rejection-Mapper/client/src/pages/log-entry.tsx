@@ -204,7 +204,7 @@ export default function LogEntry() {
       kind: "rejection" as EntryKind,
       code: t.rejectionCode,
       reason: t.reason,
-      zone: null,
+      zone: (t as any).type && t.type !== "rejection" && t.type !== "rework" ? t.type : null,
       rawId: t.id,
     }));
     return [...rw, ...rej].sort((a, b) => a.code.localeCompare(b.code));
