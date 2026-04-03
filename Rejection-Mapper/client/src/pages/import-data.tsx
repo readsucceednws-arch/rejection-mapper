@@ -1630,25 +1630,52 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
             // Normalise for dedup check — strip spaces so "Z1- CHAMFER NG" and "Z1-CHAMFERNG" don't double-import
             const codeKey = code.replace(/\s+/g, "");
 
-            if (existingRejKeys.has(codeKey)) {
-              // Code already exists — if it has no zone yet and we have one, update it
-              if (rawZone) {
-                const existing = localRejTypes.find(
-                  (t) => normalizeCode(t.rejectionCode) === codeKey
-                );
-                const hasNoZone = !existing?.type || existing.type === "rejection" || existing.type === "rework";
-                if (existing && hasNoZone) {
-                  await new Promise<void>((resolve) => {
-                    updateRejType.mutate(
-                      { id: existing.id, data: { type: rawZone } },
-                      { onSuccess: () => resolve(), onError: () => resolve() }
-                    );
-                  });
-                  existing.type = rawZone;
-                  result.added++;
-                } else {
-                  result.skipped++;
+            // Check for exact match first
+            let exactMatch = existingRejKeys.has(codeKey);
+
+            // Also check if an existing entry's code is a TRUNCATED version of this code
+            // e.g. old entry "Z1" should match new full name "Z1- CHAMFER NG"
+            // We find any existing entry whose normalised code equals the start of our codeKey
+            const prefixMatch = !exactMatch
+              ? localRejTypes.find((t) => {
+                  const existingKey = normalizeCode(t.rejectionCode);
+                  return existingKey.length < codeKey.length &&
+                    codeKey.startsWith(existingKey) &&
+                    existingKey.length >= 2;
+                })
+              : null;
+
+            if (exactMatch || prefixMatch) {
+              const existing = exactMatch
+                ? localRejTypes.find((t) => normalizeCode(t.rejectionCode) === codeKey)
+                : prefixMatch!;
+
+              // If existing entry has a truncated code, update it to the full name
+              const needsCodeUpdate = prefixMatch != null;
+              const hasNoZone = !existing?.type || existing.type === "rejection" || existing.type === "rework";
+              const needsZoneUpdate = rawZone && hasNoZone;
+
+              if (existing && (needsCodeUpdate || needsZoneUpdate)) {
+                await new Promise<void>((resolve) => {
+                  updateRejType.mutate(
+                    {
+                      id: existing.id,
+                      data: {
+                        ...(needsCodeUpdate ? { rejectionCode: code, reason: reason || code } : {}),
+                        ...(needsZoneUpdate ? { type: rawZone } : {}),
+                      },
+                    },
+                    { onSuccess: () => resolve(), onError: () => resolve() }
+                  );
+                });
+                if (needsCodeUpdate) {
+                  existing.rejectionCode = code;
+                  // Update the key in existingRejKeys
+                  existingRejKeys.delete(normalizeCode(prefixMatch!.rejectionCode));
+                  existingRejKeys.add(codeKey);
                 }
+                if (needsZoneUpdate) existing.type = rawZone;
+                result.added++;
               } else {
                 result.skipped++;
               }
