@@ -22,7 +22,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { CheckCircle2, ChevronsUpDown, Check, ClipboardList, X } from "lucide-react";
+import { CheckCircle2, ChevronsUpDown, Check, ClipboardList, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -38,6 +38,11 @@ interface UnifiedType {
   rawId: number;
 }
 
+interface ReasonRow {
+  typeKey: string;
+  quantity: string;
+}
+
 interface LoggedEntry {
   id: number;
   kind: EntryKind;
@@ -49,24 +54,25 @@ interface LoggedEntry {
   remarks?: string;
 }
 
-// ── Multi-select combobox ──────────────────────────────────────────────────────
+// ── Single searchable combobox ─────────────────────────────────────────────────
 
-function MultiSearchableSelect({
+function SearchableSelect({
   options,
-  values,
-  onToggle,
+  value,
+  onValueChange,
   placeholder,
   searchPlaceholder,
   testId,
 }: {
   options: { value: string; label: string; sublabel?: string; group?: string }[];
-  values: Set<string>;
-  onToggle: (val: string) => void;
+  value: string;
+  onValueChange: (val: string) => void;
   placeholder: string;
   searchPlaceholder: string;
   testId?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const selected = options.find((o) => o.value === value);
 
   const grouped = useMemo(() => {
     const map = new Map<string, typeof options>();
@@ -79,97 +85,6 @@ function MultiSearchableSelect({
   }, [options]);
 
   const hasGroups = [...grouped.keys()].some((k) => k !== "");
-
-  const renderItem = (option: typeof options[0]) => (
-    <CommandItem
-      key={option.value}
-      value={`${option.label} ${option.sublabel ?? ""} ${option.group ?? ""}`}
-      onSelect={() => onToggle(option.value)}
-    >
-      <div className={cn(
-        "mr-2 h-4 w-4 shrink-0 rounded border border-border flex items-center justify-center",
-        values.has(option.value) ? "bg-primary border-primary" : "bg-background"
-      )}>
-        {values.has(option.value) && <Check className="h-3 w-3 text-primary-foreground" />}
-      </div>
-      <span className="truncate">{option.label}</span>
-      {option.sublabel && option.sublabel !== option.label && (
-        <span className="ml-2 text-xs text-muted-foreground truncate">{option.sublabel}</span>
-      )}
-    </CommandItem>
-  );
-
-  const selectedCount = values.size;
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          className="w-full justify-between font-normal h-10 px-3 text-left"
-          data-testid={testId}
-        >
-          <span className={cn("truncate text-sm", selectedCount === 0 && "text-muted-foreground")}>
-            {selectedCount === 0
-              ? placeholder
-              : selectedCount === 1
-              ? options.find((o) => values.has(o.value))?.label ?? placeholder
-              : `${selectedCount} selected`}
-          </span>
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-40" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
-        <Command>
-          <CommandInput placeholder={searchPlaceholder} className="h-9" />
-          <CommandList className="max-h-72">
-            <CommandEmpty>No results found.</CommandEmpty>
-            {hasGroups
-              ? [...grouped.entries()].map(([group, opts]) => (
-                  <CommandGroup key={group} heading={group || undefined}>
-                    {opts.map(renderItem)}
-                  </CommandGroup>
-                ))
-              : [...(grouped.get("") ?? [])].map(renderItem)}
-          </CommandList>
-        </Command>
-        {selectedCount > 0 && (
-          <div className="border-t border-border px-3 py-2 flex items-center justify-between">
-            <span className="text-xs text-muted-foreground">{selectedCount} selected</span>
-            <button
-              className="text-xs text-destructive hover:underline"
-              onClick={() => { values.forEach((v) => onToggle(v)); }}
-            >
-              Clear all
-            </button>
-          </div>
-        )}
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-// ── Single searchable combobox (for part) ──────────────────────────────────────
-
-function SearchableSelect({
-  options,
-  value,
-  onValueChange,
-  placeholder,
-  searchPlaceholder,
-  testId,
-}: {
-  options: { value: string; label: string; sublabel?: string }[];
-  value: string;
-  onValueChange: (val: string) => void;
-  placeholder: string;
-  searchPlaceholder: string;
-  testId?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const selected = options.find((o) => o.value === value);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -192,19 +107,37 @@ function SearchableSelect({
           <CommandInput placeholder={searchPlaceholder} className="h-9" />
           <CommandList className="max-h-72">
             <CommandEmpty>No results found.</CommandEmpty>
-            {options.map((option) => (
-              <CommandItem
-                key={option.value}
-                value={`${option.label} ${option.sublabel ?? ""}`}
-                onSelect={() => { onValueChange(option.value); setOpen(false); }}
-              >
-                <Check className={cn("mr-2 h-4 w-4 shrink-0", value === option.value ? "opacity-100" : "opacity-0")} />
-                <span className="truncate">{option.label}</span>
-                {option.sublabel && (
-                  <span className="ml-2 text-xs text-muted-foreground truncate">{option.sublabel}</span>
-                )}
-              </CommandItem>
-            ))}
+            {hasGroups
+              ? [...grouped.entries()].map(([group, opts]) => (
+                  <CommandGroup key={group} heading={group || undefined}>
+                    {opts.map((option) => (
+                      <CommandItem
+                        key={option.value}
+                        value={`${option.label} ${option.sublabel ?? ""} ${option.group ?? ""}`}
+                        onSelect={() => { onValueChange(option.value); setOpen(false); }}
+                      >
+                        <Check className={cn("mr-2 h-4 w-4 shrink-0", value === option.value ? "opacity-100" : "opacity-0")} />
+                        <span className="truncate">{option.label}</span>
+                        {option.sublabel && (
+                          <span className="ml-2 text-xs text-muted-foreground truncate">{option.sublabel}</span>
+                        )}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                ))
+              : options.map((option) => (
+                  <CommandItem
+                    key={option.value}
+                    value={`${option.label} ${option.sublabel ?? ""}`}
+                    onSelect={() => { onValueChange(option.value); setOpen(false); }}
+                  >
+                    <Check className={cn("mr-2 h-4 w-4 shrink-0", value === option.value ? "opacity-100" : "opacity-0")} />
+                    <span className="truncate">{option.label}</span>
+                    {option.sublabel && (
+                      <span className="ml-2 text-xs text-muted-foreground truncate">{option.sublabel}</span>
+                    )}
+                  </CommandItem>
+                ))}
           </CommandList>
         </Command>
       </PopoverContent>
@@ -212,31 +145,51 @@ function SearchableSelect({
   );
 }
 
-// ── Field wrapper ──────────────────────────────────────────────────────────────
+// ── Excel-style row ────────────────────────────────────────────────────────────
 
-function Field({
+function ExcelRow({
   label,
+  rowNum,
+  labelColor,
   required,
   hint,
   children,
+  action,
 }: {
   label: string;
+  rowNum?: number;
+  labelColor: string;
   required?: boolean;
   hint?: string;
   children: React.ReactNode;
+  action?: React.ReactNode;
 }) {
   return (
-    <div className="space-y-1.5">
-      <label className="text-sm font-medium text-foreground">
-        {label}{required && <span className="text-destructive ml-0.5">*</span>}
-      </label>
-      {children}
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+    <div className="grid grid-cols-[200px_1fr] items-stretch border-b border-border last:border-0">
+      {/* Column A — label */}
+      <div className={cn("flex items-center gap-2 px-3 py-3 border-r border-border min-h-[52px]", labelColor)}>
+        {rowNum !== undefined && (
+          <span className="text-[10px] font-mono text-muted-foreground/50 w-5 shrink-0 text-right">{rowNum}</span>
+        )}
+        <span className="text-sm font-semibold text-foreground leading-tight">
+          {label}{required && <span className="text-destructive ml-0.5">*</span>}
+        </span>
+      </div>
+      {/* Column B — input */}
+      <div className="px-3 py-2.5 flex items-center gap-2 bg-background">
+        <div className="flex-1 flex flex-col gap-0.5">
+          {children}
+          {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+        </div>
+        {action}
+      </div>
     </div>
   );
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
+
+const EMPTY_ROW = (): ReasonRow => ({ typeKey: "", quantity: "1" });
 
 export default function LogEntry() {
   const { toast } = useToast();
@@ -252,8 +205,7 @@ export default function LogEntry() {
   const [kind, setKind] = useState<EntryKind>(() => {
     try { return (localStorage.getItem("logEntry_lastKind") as EntryKind) || "rejection"; } catch { return "rejection"; }
   });
-  const [typeKeys, setTypeKeys] = useState<Set<string>>(new Set());
-  const [quantity, setQuantity] = useState("1");
+  const [rows, setRows] = useState<ReasonRow[]>([EMPTY_ROW()]);
   const [remarks, setRemarks] = useState("");
   const [entryDate, setEntryDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [recentlyLogged, setRecentlyLogged] = useState<LoggedEntry[]>([]);
@@ -273,7 +225,6 @@ export default function LogEntry() {
       kind: "rejection" as EntryKind,
       code: t.rejectionCode,
       reason: t.reason,
-      // Use t.type as zone if it's not a generic entry-kind label (from Log Entry 2)
       zone: t.type && t.type !== "rejection" && t.type !== "rework" ? t.type : null,
       rawId: t.id,
     }));
@@ -299,32 +250,34 @@ export default function LogEntry() {
     [allTypes, kind]
   );
 
-  const selectedTypes = useMemo(
-    () => allTypes.filter((t) => typeKeys.has(t.id)),
-    [allTypes, typeKeys]
-  );
-
-  const toggleType = (id: string) => {
-    setTypeKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+  const updateRow = (index: number, patch: Partial<ReasonRow>) => {
+    setRows((prev) => prev.map((r, i) => i === index ? { ...r, ...patch } : r));
   };
 
-  const removeType = (id: string) => {
-    setTypeKeys((prev) => { const next = new Set(prev); next.delete(id); return next; });
+  const addRow = () => setRows((prev) => [...prev, EMPTY_ROW()]);
+
+  const removeRow = (index: number) => {
+    setRows((prev) => prev.length === 1 ? prev : prev.filter((_, i) => i !== index));
+  };
+
+  const handleKindChange = (newKind: EntryKind) => {
+    setKind(newKind);
+    setRows([EMPTY_ROW()]);
+    try { localStorage.setItem("logEntry_lastKind", newKind); } catch {}
   };
 
   const handleSubmit = async () => {
-    if (!partId || typeKeys.size === 0 || !quantity) {
-      toast({ title: "Missing fields", description: "Please select a part, at least one code, and a quantity.", variant: "destructive" });
+    const filledRows = rows.filter((r) => r.typeKey !== "");
+    if (!partId || filledRows.length === 0) {
+      toast({ title: "Missing fields", description: "Please select a part and at least one reason code.", variant: "destructive" });
       return;
     }
-    const qty = parseInt(quantity);
-    if (isNaN(qty) || qty < 1) {
-      toast({ title: "Invalid quantity", description: "Quantity must be a positive number.", variant: "destructive" });
-      return;
+    for (const r of filledRows) {
+      const qty = parseInt(r.quantity);
+      if (isNaN(qty) || qty < 1) {
+        toast({ title: "Invalid quantity", description: "All quantities must be positive numbers.", variant: "destructive" });
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -332,7 +285,10 @@ export default function LogEntry() {
     const newLogged: LoggedEntry[] = [];
 
     try {
-      for (const t of selectedTypes) {
+      for (const r of filledRows) {
+        const t = allTypes.find((x) => x.id === r.typeKey)!;
+        const qty = parseInt(r.quantity);
+
         if (t.kind === "rework") {
           await new Promise<void>((resolve, reject) => {
             createRework.mutate(
@@ -365,10 +321,9 @@ export default function LogEntry() {
       setRecentlyLogged((prev) => [...newLogged, ...prev].slice(0, 20));
       toast({
         title: `${newLogged.length} entr${newLogged.length === 1 ? "y" : "ies"} logged`,
-        description: `${qty} × ${part?.partNumber}`,
+        description: `${part?.partNumber}`,
       });
-      setTypeKeys(new Set());
-      setQuantity("1");
+      setRows([EMPTY_ROW()]);
       setRemarks("");
     } catch (err: any) {
       toast({ title: "Failed to log entry", description: err.message, variant: "destructive" });
@@ -377,8 +332,10 @@ export default function LogEntry() {
     }
   };
 
+  const filledCount = rows.filter((r) => r.typeKey !== "").length;
+
   return (
-    <div className="space-y-6 animate-in fade-in duration-500 max-w-3xl">
+    <div className="space-y-6 animate-in fade-in duration-500 max-w-2xl">
 
       {/* Header */}
       <div className="flex items-center gap-3 pb-2 border-b border-border">
@@ -391,140 +348,153 @@ export default function LogEntry() {
         </div>
       </div>
 
-      <div className="space-y-6">
+      {/* Excel-style table */}
+      <div className="border border-border rounded-lg overflow-hidden shadow-sm">
 
-        {/* Row 1: Part + Kind toggle */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-          <Field label="Part Number" required hint="Select the part being logged">
-            <SearchableSelect
-              options={partOptions}
-              value={partId}
-              onValueChange={(val) => {
-                setPartId(val);
-                try { localStorage.setItem("logEntry_lastPartId", val); } catch {}
-              }}
-              placeholder="Select a part..."
-              searchPlaceholder="Search part number..."
-              testId="select-part"
-            />
-          </Field>
-
-          <Field label="Purpose" required hint="Is this a rejection or a rework?">
-            <div className="flex rounded-md border border-border overflow-hidden h-10">
-              <button
-                type="button"
-                onClick={() => { setKind("rejection"); setTypeKeys(new Set()); try { localStorage.setItem("logEntry_lastKind", "rejection"); } catch {} }}
-                className={`flex-1 text-sm font-medium transition-colors ${kind === "rejection" ? "bg-destructive text-destructive-foreground" : "bg-background text-muted-foreground hover:bg-muted"}`}
-                data-testid="toggle-rejection"
-              >
-                Rejection
-              </button>
-              <button
-                type="button"
-                onClick={() => { setKind("rework"); setTypeKeys(new Set()); try { localStorage.setItem("logEntry_lastKind", "rework"); } catch {} }}
-                className={`flex-1 text-sm font-medium transition-colors border-l border-border ${kind === "rework" ? "bg-blue-500 text-white" : "bg-background text-muted-foreground hover:bg-muted"}`}
-                data-testid="toggle-rework"
-              >
-                Rework
-              </button>
-            </div>
-          </Field>
-        </div>
-
-        {/* Code multi-select */}
-        <Field
-          label={kind === "rejection" ? "Rejection Code" : "Rework Code"}
-          required
-          hint="Select one or more codes"
-        >
-          <MultiSearchableSelect
-            options={typeOptions}
-            values={typeKeys}
-            onToggle={toggleType}
-            placeholder={kind === "rejection" ? "Select rejection code(s)..." : "Select rework code(s)..."}
-            searchPlaceholder="Search codes..."
-            testId="select-type"
+        {/* Date */}
+        <ExcelRow label="Date" rowNum={2} labelColor="bg-yellow-200/70 dark:bg-yellow-900/30" required hint="Date of the entry">
+          <Input
+            type="date"
+            value={entryDate}
+            onChange={(e) => setEntryDate(e.target.value)}
+            className="h-9 max-w-[180px]"
+            data-testid="input-date"
           />
+        </ExcelRow>
 
-          {/* Selected codes as chips */}
-          {selectedTypes.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {selectedTypes.map((t) => (
-                <span
-                  key={t.id}
-                  className={cn(
-                    "inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border font-medium",
-                    t.kind === "rework"
-                      ? "bg-blue-500/10 text-blue-700 border-blue-300 dark:text-blue-400 dark:border-blue-700"
-                      : "bg-destructive/10 text-destructive border-destructive/30"
-                  )}
-                >
-                  {t.code}
-                  {t.zone && <span className="opacity-60 font-normal">· {t.zone}</span>}
+        {/* Part Name */}
+        <ExcelRow label="Part Name" rowNum={3} labelColor="bg-green-300/60 dark:bg-green-900/30" required hint="Select the part being logged">
+          <SearchableSelect
+            options={partOptions}
+            value={partId}
+            onValueChange={(val) => {
+              setPartId(val);
+              try { localStorage.setItem("logEntry_lastPartId", val); } catch {}
+            }}
+            placeholder="Select a part..."
+            searchPlaceholder="Search part number..."
+            testId="select-part"
+          />
+        </ExcelRow>
+
+        {/* Purpose */}
+        <ExcelRow label="Purpose" rowNum={4} labelColor="bg-orange-300/70 dark:bg-orange-900/30" required hint="Is this a rejection or a rework?">
+          <div className="flex rounded-md border border-border overflow-hidden h-9 w-fit">
+            <button
+              type="button"
+              onClick={() => handleKindChange("rejection")}
+              className={`px-5 text-sm font-medium transition-colors ${kind === "rejection" ? "bg-destructive text-destructive-foreground" : "bg-background text-muted-foreground hover:bg-muted"}`}
+              data-testid="toggle-rejection"
+            >
+              Rejection
+            </button>
+            <button
+              type="button"
+              onClick={() => handleKindChange("rework")}
+              className={`px-5 text-sm font-medium transition-colors border-l border-border ${kind === "rework" ? "bg-blue-500 text-white" : "bg-background text-muted-foreground hover:bg-muted"}`}
+              data-testid="toggle-rework"
+            >
+              Rework
+            </button>
+          </div>
+        </ExcelRow>
+
+        {/* Dynamic Reason + Qty pairs */}
+        {rows.map((row, i) => (
+          <div key={i}>
+            {/* Reason N */}
+            <ExcelRow
+              label={`${kind === "rejection" ? "Rejection" : "Rework"} Reason ${i + 1}`}
+              rowNum={5 + i * 2}
+              labelColor="bg-sky-200/70 dark:bg-sky-900/30"
+              required
+              action={
+                rows.length > 1 ? (
                   <button
                     type="button"
-                    onClick={() => removeType(t.id)}
-                    className="ml-0.5 opacity-50 hover:opacity-100 transition-opacity"
+                    onClick={() => removeRow(i)}
+                    className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
+                    title="Remove this reason"
                   >
-                    <X className="w-3 h-3" />
+                    <Trash2 className="w-4 h-4" />
                   </button>
-                </span>
-              ))}
-            </div>
-          )}
-        </Field>
+                ) : undefined
+              }
+            >
+              <SearchableSelect
+                options={typeOptions}
+                value={row.typeKey}
+                onValueChange={(val) => updateRow(i, { typeKey: val })}
+                placeholder={`Select ${kind} code...`}
+                searchPlaceholder="Search codes..."
+                testId={`select-reason-${i}`}
+              />
+            </ExcelRow>
 
-        {/* Quantity + Date */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-          <Field label="Quantity" required hint="Number of units per code">
-            <Input
-              type="number"
-              min={1}
-              value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-              placeholder="1"
-              data-testid="input-quantity"
-            />
-          </Field>
+            {/* Qty N */}
+            <ExcelRow
+              label={`Qty ${i + 1}`}
+              rowNum={6 + i * 2}
+              labelColor="bg-orange-100/70 dark:bg-orange-900/20"
+              required
+            >
+              <Input
+                type="number"
+                min={1}
+                value={row.quantity}
+                onChange={(e) => updateRow(i, { quantity: e.target.value })}
+                placeholder="1"
+                className="h-9 max-w-[120px]"
+                data-testid={`input-qty-${i}`}
+              />
+            </ExcelRow>
+          </div>
+        ))}
 
-          <Field label="Date" required hint="Date of the entry">
-            <Input
-              type="date"
-              value={entryDate}
-              onChange={(e) => setEntryDate(e.target.value)}
-              data-testid="input-date"
-            />
-          </Field>
+        {/* Add another reason */}
+        <div className="grid grid-cols-[200px_1fr] items-stretch border-b border-border">
+          <div className="border-r border-border bg-muted/20" />
+          <div className="px-3 py-2.5 bg-background">
+            <button
+              type="button"
+              onClick={addRow}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors group"
+            >
+              <Plus className="w-3.5 h-3.5 group-hover:text-primary transition-colors" />
+              Add another reason
+            </button>
+          </div>
         </div>
 
         {/* Remarks */}
-        <Field label="Remarks" hint="Any additional notes (optional)">
+        <ExcelRow label="Remarks" labelColor="bg-muted/40" hint="Any additional notes (optional)">
           <Input
             value={remarks}
             onChange={(e) => setRemarks(e.target.value)}
             placeholder="Enter any additional notes..."
             data-testid="input-remarks"
           />
-        </Field>
+        </ExcelRow>
 
-        {/* Submit */}
-        <div className="pt-2">
-          <Button
-            onClick={handleSubmit}
-            disabled={isSubmitting || !partId || typeKeys.size === 0}
-            className="w-full sm:w-auto px-8"
-            data-testid="button-log-entry"
-          >
-            {isSubmitting
-              ? <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin mr-2" />
-              : <CheckCircle2 className="w-4 h-4 mr-2" />}
-            {isSubmitting
-              ? "Saving…"
-              : typeKeys.size <= 1
-              ? "Log Entry"
-              : `Log ${typeKeys.size} Entries`}
-          </Button>
-        </div>
+      </div>
+
+      {/* Submit */}
+      <div className="pt-1">
+        <Button
+          onClick={handleSubmit}
+          disabled={isSubmitting || !partId || filledCount === 0}
+          className="w-full sm:w-auto px-8"
+          data-testid="button-log-entry"
+        >
+          {isSubmitting
+            ? <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin mr-2" />
+            : <CheckCircle2 className="w-4 h-4 mr-2" />}
+          {isSubmitting
+            ? "Saving…"
+            : filledCount <= 1
+            ? "Log Entry"
+            : `Log ${filledCount} Entries`}
+        </Button>
       </div>
 
       {/* Recently logged this session */}
