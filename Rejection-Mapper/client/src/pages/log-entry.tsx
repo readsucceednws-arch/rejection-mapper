@@ -6,7 +6,6 @@ import { useParts } from "@/hooks/use-parts";
 import { useRejectionTypes } from "@/hooks/use-rejection-types";
 import { useReworkTypes } from "@/hooks/use-rework-types";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,7 +22,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { CheckCircle2, ChevronsUpDown, Check } from "lucide-react";
+import { CheckCircle2, ChevronsUpDown, Check, ClipboardList } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -31,12 +30,12 @@ import { cn } from "@/lib/utils";
 type EntryKind = "rework" | "rejection";
 
 interface UnifiedType {
-  id: string;          // "rw-{id}" or "rej-{id}"
+  id: string;
   kind: EntryKind;
-  code: string;        // reworkCode / rejectionCode
-  reason: string;      // human description
-  zone: string | null; // zone name
-  rawId: number;       // original DB id
+  code: string;
+  reason: string;
+  zone: string | null;
+  rawId: number;
 }
 
 interface LoggedEntry {
@@ -72,16 +71,17 @@ function SearchableSelect({
   const [open, setOpen] = useState(false);
   const selected = options.find((o) => o.value === value);
 
-  // Group options by their group label
   const grouped = useMemo(() => {
     const map = new Map<string, typeof options>();
     for (const opt of options) {
-      const g = opt.group ?? "Other";
+      const g = opt.group ?? "";
       if (!map.has(g)) map.set(g, []);
       map.get(g)!.push(opt);
     }
     return map;
   }, [options]);
+
+  const hasGroups = [...grouped.keys()].some((k) => k !== "");
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -91,51 +91,79 @@ function SearchableSelect({
           role="combobox"
           aria-expanded={open}
           disabled={disabled}
-          className="w-full justify-between font-normal h-10 px-3"
+          className="w-full justify-between font-normal h-10 px-3 text-left"
           data-testid={testId}
         >
-          <span className={cn("truncate", !selected && "text-muted-foreground")}>
+          <span className={cn("truncate text-sm", !selected && "text-muted-foreground")}>
             {selected ? selected.label : placeholder}
           </span>
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-40" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
         <Command>
           <CommandInput placeholder={searchPlaceholder} className="h-9" />
-          <CommandList className="max-h-64">
+          <CommandList className="max-h-72">
             <CommandEmpty>No results found.</CommandEmpty>
-            {[...grouped.entries()].map(([group, opts]) => (
-              <CommandGroup key={group} heading={group}>
-                {opts.map((option) => (
+            {hasGroups
+              ? [...grouped.entries()].map(([group, opts]) => (
+                  <CommandGroup key={group} heading={group || undefined}>
+                    {opts.map((option) => (
+                      <CommandItem
+                        key={option.value}
+                        value={`${option.label} ${option.sublabel ?? ""} ${group}`}
+                        onSelect={() => { onValueChange(option.value); setOpen(false); }}
+                      >
+                        <Check className={cn("mr-2 h-4 w-4 shrink-0", value === option.value ? "opacity-100" : "opacity-0")} />
+                        <span className="truncate">{option.label}</span>
+                        {option.sublabel && option.sublabel !== option.label && (
+                          <span className="ml-2 text-xs text-muted-foreground truncate">{option.sublabel}</span>
+                        )}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                ))
+              : [...(grouped.get("") ?? [])].map((option) => (
                   <CommandItem
                     key={option.value}
-                    value={`${option.label} ${option.sublabel ?? ""} ${group}`}
-                    onSelect={() => {
-                      onValueChange(option.value);
-                      setOpen(false);
-                    }}
+                    value={`${option.label} ${option.sublabel ?? ""}`}
+                    onSelect={() => { onValueChange(option.value); setOpen(false); }}
                   >
-                    <Check
-                      className={cn(
-                        "mr-2 h-4 w-4 shrink-0",
-                        value === option.value ? "opacity-100" : "opacity-0"
-                      )}
-                    />
+                    <Check className={cn("mr-2 h-4 w-4 shrink-0", value === option.value ? "opacity-100" : "opacity-0")} />
                     <span className="truncate">{option.label}</span>
                     {option.sublabel && option.sublabel !== option.label && (
-                      <span className="ml-2 text-xs text-muted-foreground truncate">
-                        {option.sublabel}
-                      </span>
+                      <span className="ml-2 text-xs text-muted-foreground truncate">{option.sublabel}</span>
                     )}
                   </CommandItem>
                 ))}
-              </CommandGroup>
-            ))}
           </CommandList>
         </Command>
       </PopoverContent>
     </Popover>
+  );
+}
+
+// ── Field wrapper ──────────────────────────────────────────────────────────────
+
+function Field({
+  label,
+  required,
+  hint,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <label className="text-sm font-medium text-foreground">
+        {label}{required && <span className="text-destructive ml-0.5">*</span>}
+      </label>
+      {children}
+      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+    </div>
   );
 }
 
@@ -161,7 +189,7 @@ export default function LogEntry() {
   const [recentlyLogged, setRecentlyLogged] = useState<LoggedEntry[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // ── Build unified type list grouped by zone/purpose ────────────────────────
+  // Unified type list grouped by zone
   const allTypes = useMemo<UnifiedType[]>(() => {
     const rw: UnifiedType[] = (reworkTypes ?? []).map((t) => ({
       id: `rw-${t.id}`,
@@ -203,7 +231,7 @@ export default function LogEntry() {
 
   const handleSubmit = async () => {
     if (!partId || !typeKey || !quantity) {
-      toast({ title: "Missing fields", description: "Please fill in part, purpose, and quantity.", variant: "destructive" });
+      toast({ title: "Missing fields", description: "Please fill in all required fields.", variant: "destructive" });
       return;
     }
     const qty = parseInt(quantity);
@@ -211,10 +239,7 @@ export default function LogEntry() {
       toast({ title: "Invalid quantity", description: "Quantity must be a positive number.", variant: "destructive" });
       return;
     }
-    if (!selectedType) {
-      toast({ title: "Invalid type", description: "Please select a valid purpose.", variant: "destructive" });
-      return;
-    }
+    if (!selectedType) return;
 
     setIsSubmitting(true);
     try {
@@ -257,7 +282,6 @@ export default function LogEntry() {
       toast({ title: "Entry logged", description: `${qty} × ${part?.partNumber} saved.` });
       setQuantity("1");
       setRemarks("");
-      // Keep part + type selected for the next entry
     } catch (err: any) {
       toast({ title: "Failed to log entry", description: err.message, variant: "destructive" });
     } finally {
@@ -266,21 +290,25 @@ export default function LogEntry() {
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500 max-w-2xl">
-      <div>
-        <h1 className="text-3xl font-display font-bold text-foreground">Log Entry</h1>
-        <p className="text-muted-foreground mt-1 text-sm">Record a new rejection or rework entry</p>
+    <div className="space-y-6 animate-in fade-in duration-500 max-w-3xl">
+
+      {/* Header */}
+      <div className="flex items-center gap-3 pb-2 border-b border-border">
+        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+          <ClipboardList className="w-4 h-4 text-primary" />
+        </div>
+        <div>
+          <h1 className="text-xl font-semibold text-foreground">New Entry Form</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">All fields marked with an asterisk are required.</p>
+        </div>
       </div>
 
-      <Card className="border-border/50 shadow-sm">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base font-semibold">New Entry</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      {/* Form grid */}
+      <div className="space-y-6">
 
-          {/* Part */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Part</label>
+        {/* Row 1: Part + Purpose */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <Field label="Part Number" required hint="Select the part being logged">
             <SearchableSelect
               options={partOptions}
               value={partId}
@@ -288,15 +316,13 @@ export default function LogEntry() {
                 setPartId(val);
                 try { localStorage.setItem("logEntry_lastPartId", val); } catch {}
               }}
-              placeholder="Search part number…"
-              searchPlaceholder="Type to search parts…"
+              placeholder="Select a part..."
+              searchPlaceholder="Search part number..."
               testId="select-part"
             />
-          </div>
+          </Field>
 
-          {/* Purpose — all rework + rejection types in one grouped list */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Purpose</label>
+          <Field label="Purpose" required hint="Select the rework or rejection reason">
             <SearchableSelect
               options={typeOptions}
               value={typeKey}
@@ -304,11 +330,10 @@ export default function LogEntry() {
                 setTypeKey(val);
                 try { localStorage.setItem("logEntry_lastTypeKey", val); } catch {}
               }}
-              placeholder="Search purpose / code…"
-              searchPlaceholder="Type to search purpose…"
+              placeholder="Select purpose..."
+              searchPlaceholder="Search purpose..."
               testId="select-purpose"
             />
-            {/* Show zone + kind badge once selected */}
             {selectedType && (
               <div className="flex items-center gap-2 mt-1">
                 <Badge
@@ -324,49 +349,48 @@ export default function LogEntry() {
                 )}
               </div>
             )}
-          </div>
+          </Field>
+        </div>
 
-          {/* Quantity + Date */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Quantity</label>
-              <Input
-                type="number"
-                min={1}
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-                placeholder="1"
-                data-testid="input-quantity"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Date</label>
-              <Input
-                type="date"
-                value={entryDate}
-                onChange={(e) => setEntryDate(e.target.value)}
-                data-testid="input-date"
-              />
-            </div>
-          </div>
-
-          {/* Remarks */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">
-              Remarks <span className="text-muted-foreground font-normal">(optional)</span>
-            </label>
+        {/* Row 2: Quantity + Date */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <Field label="Quantity" required hint="Number of units">
             <Input
-              value={remarks}
-              onChange={(e) => setRemarks(e.target.value)}
-              placeholder="Any additional notes…"
-              data-testid="input-remarks"
+              type="number"
+              min={1}
+              value={quantity}
+              onChange={(e) => setQuantity(e.target.value)}
+              placeholder="1"
+              data-testid="input-quantity"
             />
-          </div>
+          </Field>
 
+          <Field label="Date" required hint="Date of the entry">
+            <Input
+              type="date"
+              value={entryDate}
+              onChange={(e) => setEntryDate(e.target.value)}
+              data-testid="input-date"
+            />
+          </Field>
+        </div>
+
+        {/* Row 3: Remarks full width */}
+        <Field label="Remarks" hint="Any additional notes or observations (optional)">
+          <Input
+            value={remarks}
+            onChange={(e) => setRemarks(e.target.value)}
+            placeholder="Enter any additional notes..."
+            data-testid="input-remarks"
+          />
+        </Field>
+
+        {/* Submit */}
+        <div className="pt-2">
           <Button
-            className="w-full"
             onClick={handleSubmit}
             disabled={isSubmitting || !partId || !typeKey}
+            className="w-full sm:w-auto px-8"
             data-testid="button-log-entry"
           >
             {isSubmitting
@@ -374,39 +398,42 @@ export default function LogEntry() {
               : <CheckCircle2 className="w-4 h-4 mr-2" />}
             {isSubmitting ? "Saving…" : "Log Entry"}
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Recently logged this session */}
       {recentlyLogged.length > 0 && (
-        <Card className="border-border/50 shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold text-muted-foreground">Logged this session</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-0">
+        <div className="border-t border-border pt-6 space-y-3">
+          <h2 className="text-sm font-semibold text-muted-foreground">Logged this session</h2>
+          <div className="space-y-0 border border-border rounded-lg overflow-hidden">
             {recentlyLogged.map((entry, i) => (
-              <div key={`${entry.id}-${i}`} className="flex items-center justify-between py-2.5 border-b border-border/40 last:border-0">
-                <div className="flex items-center gap-2 min-w-0">
+              <div
+                key={`${entry.id}-${i}`}
+                className="flex items-center justify-between px-4 py-3 border-b border-border/50 last:border-0 hover:bg-muted/20"
+              >
+                <div className="flex items-center gap-3 min-w-0">
                   <Badge
                     variant="outline"
                     className={entry.kind === "rework"
-                      ? "bg-blue-500/10 text-blue-600 border-blue-400/30 shrink-0"
-                      : "bg-destructive/10 text-destructive border-destructive/20 shrink-0"}
+                      ? "bg-blue-500/10 text-blue-600 border-blue-400/30 shrink-0 text-xs"
+                      : "bg-destructive/10 text-destructive border-destructive/20 shrink-0 text-xs"}
                   >
                     {entry.kind === "rework" ? "Rework" : "Rejection"}
                   </Badge>
                   <span className="text-sm font-medium truncate">{entry.partNumber}</span>
-                  <span className="text-xs text-muted-foreground truncate">{entry.code}</span>
-                  {entry.zone && <span className="text-xs text-muted-foreground hidden sm:block truncate">· {entry.zone}</span>}
+                  <span className="text-sm text-muted-foreground truncate">{entry.code}</span>
+                  {entry.zone && (
+                    <span className="text-xs text-muted-foreground hidden sm:block truncate">· {entry.zone}</span>
+                  )}
                 </div>
-                <div className="flex items-center gap-3 text-sm shrink-0 ml-2">
-                  <span className="font-bold">{entry.quantity}</span>
+                <div className="flex items-center gap-4 shrink-0 ml-3">
+                  <span className="font-semibold text-sm">{entry.quantity}</span>
                   <span className="text-xs text-muted-foreground">{entry.date}</span>
                 </div>
               </div>
             ))}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       )}
     </div>
   );
