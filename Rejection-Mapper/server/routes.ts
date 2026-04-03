@@ -35,14 +35,13 @@ interface ImportState {
   cancelled: boolean;
   startTime: number;
   orgId: number;
-  // Progress tracking — updated by the background job
   status: "pending" | "running" | "done" | "failed" | "cancelled";
   totalRows: number;
   processedRows: number;
   successfulImports: number;
   failedRows: number;
   message: string;
-  result?: Record<string, any>; // final result stored when done
+  result?: Record<string, any>;
 }
 
 const activeImports = new Map<string, ImportState>();
@@ -65,13 +64,63 @@ function createImportState(orgId: number): { id: string; state: ImportState } {
     message: "Starting...",
   };
   activeImports.set(id, state);
-  
-  // Auto-cleanup after 1 hour
-  setTimeout(() => {
-    activeImports.delete(id);
-  }, 60 * 60 * 1000);
-  
+  setTimeout(() => { activeImports.delete(id); }, 60 * 60 * 1000);
   return { id, state };
+}
+
+// ─── RESUME CHECKPOINT HELPERS (DB-backed, survives server restarts) ─────────
+function computeFingerprint(rows: Record<string, any>[]): string {
+  const total = rows.length;
+  if (total === 0) return "empty";
+  const indices = new Set<number>([0, total - 1]);
+  if (total > 2) {
+    const step = Math.max(1, Math.floor(total / 10));
+    for (let i = step; i < total - 1; i += step) indices.add(i);
+  }
+  const parts: string[] = [`n=${total}`];
+  for (const idx of [...indices].sort((a, b) => a - b)) {
+    const row = rows[idx];
+    const vals = Object.values(row)
+      .map(v => String(v ?? "").trim().toLowerCase().replace(/\s+/g, " "))
+      .join("|");
+    parts.push(`r${idx}:${vals}`);
+  }
+  const str = parts.join(";");
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
+    hash = hash >>> 0;
+  }
+  return `${total}-${hash.toString(16)}`;
+}
+
+async function loadCheckpoint(orgId: number, fingerprint: string): Promise<{ resumeFromRow: number; successfulImports: number } | null> {
+  try {
+    const { pool } = await import("./db");
+    const result = await pool.query(
+      `SELECT resume_from_row, successful_imports FROM import_checkpoints WHERE organization_id = $1 AND fingerprint = $2 LIMIT 1`,
+      [orgId, fingerprint]
+    );
+    if (result.rows.length === 0) return null;
+    return { resumeFromRow: result.rows[0].resume_from_row, successfulImports: result.rows[0].successful_imports };
+  } catch { return null; }
+}
+
+async function saveCheckpoint(orgId: number, fingerprint: string, resumeFromRow: number, successfulImports: number): Promise<void> {
+  try {
+    const { pool } = await import("./db");
+    await pool.query(
+      `INSERT INTO import_checkpoints (organization_id, fingerprint, resume_from_row, successful_imports) VALUES ($1, $2, $3, $4) ON CONFLICT (organization_id, fingerprint) DO UPDATE SET resume_from_row = $3, successful_imports = $4, created_at = now()`,
+      [orgId, fingerprint, resumeFromRow, successfulImports]
+    );
+  } catch { /* non-fatal */ }
+}
+
+async function clearCheckpoint(orgId: number, fingerprint: string): Promise<void> {
+  try {
+    const { pool } = await import("./db");
+    await pool.query(`DELETE FROM import_checkpoints WHERE organization_id = $1 AND fingerprint = $2`, [orgId, fingerprint]);
+  } catch { /* non-fatal */ }
 }
 
 export async function registerRoutes(
@@ -917,121 +966,6 @@ export async function registerRoutes(
     }
   });
 
-  // --- FIX ZONE-SHORTHAND REWORK/REJECTION TYPES ---
-  // Finds types where reworkCode/rejectionCode is a zone shorthand (Z1, Z2 etc.)
-  // and renames them to use their reason field as the code instead.
-  // This fixes records imported before the code/reason fix was applied.
-  app.post("/api/fix-zone-codes", isAdmin, async (req, res) => {
-    try {
-      const orgId = getOrgId(req);
-      const { dryRun } = req.body as { dryRun?: boolean };
-      const { pool } = await import("./db");
-
-      // Find rework types where code looks like a zone shorthand
-      const rwBadQuery = `
-        SELECT id, rework_code, reason, zone
-        FROM rework_types
-        WHERE organization_id = $1
-          AND rework_code ~ '^Z[0-9]{1,2}(-\S+)?$'
-      `;
-      const rejBadQuery = `
-        SELECT id, rejection_code, reason, zone
-        FROM rejection_types
-        WHERE organization_id = $1
-          AND rejection_code ~ '^Z[0-9]{1,2}(-\S+)?$'
-      `;
-
-      const rwBad = await pool.query(rwBadQuery, [orgId]);
-      const rejBad = await pool.query(rejBadQuery, [orgId]);
-
-      if (dryRun) {
-        return res.json({
-          dryRun: true,
-          reworkToFix: rwBad.rows.length,
-          rejectionToFix: rejBad.rows.length,
-          samples: [...rwBad.rows.slice(0, 5), ...rejBad.rows.slice(0, 5)],
-          message: `Found ${rwBad.rows.length + rejBad.rows.length} zone-shorthand codes to fix.`,
-        });
-      }
-
-      // Zone shorthand → full zone name
-      const ZONE_MAP: Record<string, string> = {
-        "Z1": "ZONE 1 - TRAUB",
-        "Z2": "ZONE 2",
-        "Z3": "ZONE 3",
-        "Z4": "ZONE 4 - CNC",
-        "Z5": "ZONE 5 - PLATING",
-        "Z6": "RM SUPPLIER",
-      };
-
-      let rwFixed = 0;
-      for (const row of rwBad.rows) {
-        const newCode = row.reason && row.reason !== row.rework_code
-          ? row.reason  // Use existing reason as the new code
-          : row.rework_code; // No real reason, keep as-is
-        const newZone = row.zone || ZONE_MAP[row.rework_code.toUpperCase().split("-")[0]] || row.rework_code;
-
-        // Check if a type with the new code already exists
-        const existing = await pool.query(
-          `SELECT id FROM rework_types WHERE organization_id = $1 AND rework_code = $2 AND id != $3`,
-          [orgId, newCode, row.id]
-        );
-
-        if (existing.rows.length > 0) {
-          // Merge: update entries to point to the existing type, then delete this one
-          await pool.query(
-            `UPDATE rework_entries SET rework_type_id = $1 WHERE rework_type_id = $2`,
-            [existing.rows[0].id, row.id]
-          );
-          await pool.query(`DELETE FROM rework_types WHERE id = $1`, [row.id]);
-        } else {
-          await pool.query(
-            `UPDATE rework_types SET rework_code = $1, reason = $2, zone = $3 WHERE id = $4`,
-            [newCode, newCode, newZone, row.id]
-          );
-        }
-        rwFixed++;
-      }
-
-      let rejFixed = 0;
-      for (const row of rejBad.rows) {
-        const newCode = row.reason && row.reason !== row.rejection_code
-          ? row.reason
-          : row.rejection_code;
-        const newZone = row.zone || ZONE_MAP[row.rejection_code.toUpperCase().split("-")[0]] || row.rejection_code;
-
-        const existing = await pool.query(
-          `SELECT id FROM rejection_types WHERE organization_id = $1 AND rejection_code = $2 AND id != $3`,
-          [orgId, newCode, row.id]
-        );
-
-        if (existing.rows.length > 0) {
-          await pool.query(
-            `UPDATE rejection_entries SET rejection_type_id = $1 WHERE rejection_type_id = $2`,
-            [existing.rows[0].id, row.id]
-          );
-          await pool.query(`DELETE FROM rejection_types WHERE id = $1`, [row.id]);
-        } else {
-          await pool.query(
-            `UPDATE rejection_types SET rejection_code = $1, reason = $2 WHERE id = $3`,
-            [newCode, newCode, row.id]
-          );
-        }
-        rejFixed++;
-      }
-
-      res.json({
-        success: true,
-        reworkFixed: rwFixed,
-        rejectionFixed: rejFixed,
-        message: `Fixed ${rwFixed + rejFixed} zone-shorthand codes (${rwFixed} rework, ${rejFixed} rejection).`,
-      });
-    } catch (err: any) {
-      console.error("[fix-zone-codes]", err);
-      res.status(500).json({ message: err.message || "Fix failed" });
-    }
-  });
-
   // --- DEDUPLICATE EXISTING ENTRIES ---
   // Finds and removes duplicate entries (same org + part + type + quantity + calendar day)
   // keeping the earliest (lowest id) of each group.
@@ -1166,16 +1100,33 @@ export async function registerRoutes(
       return res.status(400).json({ message: "No rows provided", importId });
     }
 
-    // Respond immediately with the importId — client polls for progress
-    importState.totalRows = rows.length;
-    importState.status = "running";
-    importState.message = `Starting import of ${rows.length} rows...`;
-    res.status(202).json({ importId, totalRows: rows.length, message: "Import started" });
+    // ── Resume logic ─────────────────────────────────────────────────────────
+    const fileFingerprint = dryRun ? null : computeFingerprint(rows);
+    let startFromRow = 0;
+    let priorSuccessful = 0;
+    if (fileFingerprint) {
+      const checkpoint = await loadCheckpoint(orgId, fileFingerprint);
+      if (checkpoint && checkpoint.resumeFromRow > 0 && checkpoint.resumeFromRow < rows.length) {
+        startFromRow    = checkpoint.resumeFromRow;
+        priorSuccessful = checkpoint.successfulImports;
+      }
+    }
+
+    importState.totalRows         = rows.length;
+    importState.status            = "running";
+    importState.processedRows     = startFromRow;
+    importState.successfulImports = priorSuccessful;
+    const resumingMsg = startFromRow > 0
+      ? `Resuming from row ${startFromRow + 1} of ${rows.length} (${priorSuccessful} already imported)...`
+      : `Starting import of ${rows.length} rows...`;
+    importState.message = resumingMsg;
+    res.status(202).json({ importId, totalRows: rows.length, resumedFromRow: startFromRow, message: resumingMsg });
 
     // --- BACKGROUND PROCESSING (runs after response is sent) ---
     const logger = new ImportLogger();
     const summary = createEmptySummary();
     summary.totalRows = rows.length;
+    summary.successfulImports = priorSuccessful;
 
     try {
       logger.info(`Starting import of ${rows.length} rows`, { dryRun: !!dryRun, importId });
@@ -1208,13 +1159,16 @@ export async function registerRoutes(
       );
 
       // Process each row
-      for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+      for (let rowIndex = startFromRow; rowIndex < rows.length; rowIndex++) {
         // Check if import was cancelled
         if (importState.cancelled) {
           logger.warn(`Import cancelled by user at row ${rowIndex + 1}`);
           importState.status = "cancelled";
           importState.message = `Cancelled at row ${rowIndex + 1}. ${summary.successfulImports} of ${summary.totalRows} rows imported.`;
           importState.result = { success: false, cancelled: true, summary, logs: logger.getLogs() };
+          if (fileFingerprint) {
+            await saveCheckpoint(orgId, fileFingerprint, rowIndex, summary.successfulImports);
+          }
           activeImports.delete(importId);
           return;
         }
@@ -1246,95 +1200,11 @@ export async function registerRoutes(
           const dateStr = normalizeText(getField("Date", "Entry Date", "entry_date", "LogDate", "Transaction Date"));
           const partNumber = normalizeText(getField("Part Number", "part_number", "Part No", "PN", "Part", "Item", "Item Name", "Component"));
           const typeField = normalizeText(getField("Type", "Entry Type", "Category", "Purpose", "purpose"));
+          const code = normalizeText(getField("Code", "Rejection Code", "Rework Code", "Reason", "RejectionCode", "ReworkCode", "ReasonCode"));
           const purpose = normalizeText(getField("Purpose", "process", "Description", "description", "Operation"));
+          const zone = normalizeText(getField("Zone", "zone", "ZONE"));
           const quantityStr = normalizeText(getField("Quantity", "quantity", "Qty", "QTY", "Count", "Pieces")) || "1";
           const remarks = normalizeText(getField("Remarks", "remarks", "Notes", "notes", "Comment"));
-
-          // Read Code and Reason columns separately.
-          // In this Excel format:
-          //   "Code" column  = zone shorthand (Z1, Z2, Z3...) — used to determine zone
-          //   "Reason" column = the actual defect/rework description (CHAMFER NG, BUFFING) — used as the code
-          // Read Code and Reason columns separately
-const rawCode   = normalizeText(getField("Code", "Rejection Code", "Rework Code", "RejectionCode", "ReworkCode", "ReasonCode"));
-const rawReason = normalizeText(getField("Reason", "reason", "Description", "description", "Defect", "defect"));
-const rawZone   = normalizeText(getField("Zone", "zone", "ZONE"));
-
-// Zone shorthand → full zone name mapping
-const ZONE_MAP: Record<string, string> = {
-  "Z1": "ZONE 1 - TRAUB",
-  "Z2": "ZONE 2",
-  "Z3": "ZONE 3",
-  "Z4": "ZONE 4 - CNC",
-  "Z4-CONCENTRICITY": "ZONE 4 - CNC",
-  "Z4-MILLING": "ZONE 4 - CNC",
-  "Z5": "ZONE 5 - PLATING",
-  "Z6": "RM SUPPLIER",
-  "Z7": "ZONE 7",
-  "Z8": "ZONE 8",
-  "Z9": "ZONE 9",
-};
-
-// Detect shorthand like Z1
-const isZoneShorthand = /^Z\d{1,2}(-\S+)?$/i.test(rawCode.trim());
-
-// =======================
-// ✅ FIXED CODE LOGIC
-// =======================
-let code: string;
-
-if (rawReason) {
-  code = rawReason;
-} else if (!isZoneShorthand && rawCode) {
-  code = rawCode;
-} else {
-  code = ""; // prevents Z1 being stored as code
-}
-
-code = normalizeText(code);
-
-// =======================
-// ✅ FIXED ZONE LOGIC
-// =======================
-let zone: string;
-
-if (rawZone) {
-  // Extract Z1 from "Z1 traub"
-  const zoneKey = rawZone.split(/[\s-]/)[0].toUpperCase();
-
-  if (ZONE_MAP[zoneKey]) {
-    zone = ZONE_MAP[zoneKey];
-  } else {
-    zone = rawZone.trim();
-  }
-
-} else if (isZoneShorthand) {
-  const zoneKey = rawCode.toUpperCase().split("-")[0];
-  zone = ZONE_MAP[zoneKey] || zoneKey;
-} else {
-  zone = "";
-}
-
-          // Code = Reason column (the actual defect description)
-          // Fall back to rawCode only if Reason is blank and rawCode is not a zone shorthand
-          let code: string;
-          if (rawReason) {
-            code = rawReason;
-          } else if (!isZoneShorthand && rawCode) {
-            code = rawCode;
-          } else {
-            code = rawReason || rawCode;
-          }
-          code = normalizeText(code);
-
-          // Zone = Zone column if present; otherwise infer from zone shorthand in Code column
-          let zone: string;
-          if (rawZone) {
-            zone = rawZone;
-          } else if (isZoneShorthand) {
-            zone = ZONE_MAP[rawCode.toUpperCase()] || rawCode.toUpperCase();
-          } else {
-            zone = "";
-          }
 
           // Validate required fields
           if (isBlank(partNumber)) {
@@ -1424,10 +1294,7 @@ if (rawZone) {
           }
 
           // Get or create rejection/rework type
-          // normalizedCode is used only for MAP LOOKUP (matching existing types).
-          // storedCode is the human-readable version stored in the DB (preserves spaces/case).
           const normalizedCode = normalizeCode(code);
-          const storedCode = code.trim().toUpperCase(); // e.g. "CHAMFER NG", "PLATING-REWORK"
 
           if (isRework) {
             let reworkType = reworkCodeMap.get(normalizedCode);
@@ -1441,23 +1308,12 @@ if (rawZone) {
                 }
               }
             }
-            // Also try matching by rawReason directly (catches old entries stored as "Z1" 
-            // where reason="CHAMFER NG" — we match the new code against the stored reason)
-            if (!reworkType && rawReason) {
-              const reasonNorm = normalizeCode(rawReason);
-              for (const [, v] of reworkCodeMap.entries()) {
-                if (normalizeCode(v.reason) === reasonNorm || normalizeCode(v.reworkCode) === reasonNorm) {
-                  reworkType = v;
-                  break;
-                }
-              }
-            }
             if (!reworkType) {
-              logger.info(`Creating new rework type: ${storedCode}`);
+              logger.info(`Creating new rework type: ${normalizedCode}`);
               if (!dryRun) {
                 reworkType = await storage.createReworkType({
-                  reworkCode: storedCode,
-                  reason: rawReason || purpose || storedCode,
+                  reworkCode: normalizedCode,
+                  reason: purpose || normalizedCode,
                   zone: zone || null,
                   organizationId: orgId,
                 });
@@ -1466,8 +1322,8 @@ if (rawZone) {
               } else {
                 reworkType = {
                   id: -1,
-                  reworkCode: storedCode,
-                  reason: rawReason || purpose || storedCode,
+                  reworkCode: normalizedCode,
+                  reason: purpose || normalizedCode,
                   zone: zone || null,
                   organizationId: orgId,
                 };
@@ -1540,21 +1396,12 @@ if (rawZone) {
                 }
               }
             }
-            if (!rejectionType && rawReason) {
-              const reasonNorm = normalizeCode(rawReason);
-              for (const [, v] of rejectionCodeMap.entries()) {
-                if (normalizeCode(v.reason) === reasonNorm || normalizeCode(v.rejectionCode) === reasonNorm) {
-                  rejectionType = v;
-                  break;
-                }
-              }
-            }
             if (!rejectionType) {
-              logger.info(`Creating new rejection type: ${storedCode}`);
+              logger.info(`Creating new rejection type: ${normalizedCode}`);
               if (!dryRun) {
                 rejectionType = await storage.createRejectionType({
-                  rejectionCode: storedCode,
-                  reason: rawReason || purpose || storedCode,
+                  rejectionCode: normalizedCode,
+                  reason: purpose || normalizedCode,
                   type: "rejection",
                   organizationId: orgId,
                 });
@@ -1563,8 +1410,8 @@ if (rawZone) {
               } else {
                 rejectionType = {
                   id: -1,
-                  rejectionCode: storedCode,
-                  reason: rawReason || purpose || storedCode,
+                  rejectionCode: normalizedCode,
+                  reason: purpose || normalizedCode,
                   type: "rejection",
                   organizationId: orgId,
                 };
@@ -1662,6 +1509,9 @@ if (rawZone) {
       importState.successfulImports = summary.successfulImports;
       importState.failedRows = summary.failedRows.length;
       importState.processedRows = summary.totalRows;
+      if (fileFingerprint) {
+        await clearCheckpoint(orgId, fileFingerprint);
+      }
       importState.result = {
         success: true,
         message: finalMsg,
