@@ -180,6 +180,9 @@ export default function LogEntry() {
   const [partId, setPartId] = useState<string>(() => {
     try { return localStorage.getItem("logEntry_lastPartId") || ""; } catch { return ""; }
   });
+  const [kind, setKind] = useState<EntryKind>(() => {
+    try { return (localStorage.getItem("logEntry_lastKind") as EntryKind) || "rejection"; } catch { return "rejection"; }
+  });
   const [typeKey, setTypeKey] = useState<string>(() => {
     try { return localStorage.getItem("logEntry_lastTypeKey") || ""; } catch { return ""; }
   });
@@ -218,13 +221,15 @@ export default function LogEntry() {
   );
 
   const typeOptions = useMemo(() =>
-    allTypes.map((t) => ({
-      value: t.id,
-      label: t.code,
-      sublabel: t.reason !== t.code ? t.reason : undefined,
-      group: t.zone || (t.kind === "rejection" ? "Rejection" : "Rework"),
-    })),
-    [allTypes]
+    allTypes
+      .filter((t) => t.kind === kind)
+      .map((t) => ({
+        value: t.id,
+        label: t.code,
+        sublabel: t.reason !== t.code ? t.reason : undefined,
+        group: t.zone || undefined,
+      })),
+    [allTypes, kind]
   );
 
   const selectedType = allTypes.find((t) => t.id === typeKey) ?? null;
@@ -306,7 +311,7 @@ export default function LogEntry() {
       {/* Form grid */}
       <div className="space-y-6">
 
-        {/* Row 1: Part + Purpose */}
+        {/* Row 1: Part + Kind */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
           <Field label="Part Number" required hint="Select the part being logged">
             <SearchableSelect
@@ -322,35 +327,65 @@ export default function LogEntry() {
             />
           </Field>
 
-          <Field label="Purpose" required hint="Select the rework or rejection reason">
-            <SearchableSelect
-              options={typeOptions}
-              value={typeKey}
-              onValueChange={(val) => {
-                setTypeKey(val);
-                try { localStorage.setItem("logEntry_lastTypeKey", val); } catch {}
-              }}
-              placeholder="Select purpose..."
-              searchPlaceholder="Search purpose..."
-              testId="select-purpose"
-            />
-            {selectedType && (
-              <div className="flex items-center gap-2 mt-1">
-                <Badge
-                  variant="outline"
-                  className={selectedType.kind === "rework"
-                    ? "bg-blue-500/10 text-blue-600 border-blue-400/30 text-xs"
-                    : "bg-destructive/10 text-destructive border-destructive/20 text-xs"}
-                >
-                  {selectedType.kind === "rework" ? "Rework" : "Rejection"}
-                </Badge>
-                {selectedType.zone && (
-                  <span className="text-xs text-muted-foreground">{selectedType.zone}</span>
-                )}
-              </div>
-            )}
+          <Field label="Purpose" required hint="Is this a rejection or a rework?">
+            <div className="flex rounded-md border border-border overflow-hidden h-10">
+              <button
+                type="button"
+                onClick={() => {
+                  setKind("rejection");
+                  setTypeKey("");
+                  try { localStorage.setItem("logEntry_lastKind", "rejection"); } catch {}
+                }}
+                className={`flex-1 text-sm font-medium transition-colors ${
+                  kind === "rejection"
+                    ? "bg-destructive text-destructive-foreground"
+                    : "bg-background text-muted-foreground hover:bg-muted"
+                }`}
+                data-testid="toggle-rejection"
+              >
+                Rejection
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setKind("rework");
+                  setTypeKey("");
+                  try { localStorage.setItem("logEntry_lastKind", "rework"); } catch {}
+                }}
+                className={`flex-1 text-sm font-medium transition-colors border-l border-border ${
+                  kind === "rework"
+                    ? "bg-blue-500 text-white"
+                    : "bg-background text-muted-foreground hover:bg-muted"
+                }`}
+                data-testid="toggle-rework"
+              >
+                Rework
+              </button>
+            </div>
           </Field>
         </div>
+
+        {/* Row 2: Type code */}
+        <Field
+          label={kind === "rejection" ? "Rejection Code" : "Rework Code"}
+          required
+          hint={kind === "rejection" ? "Select the rejection reason" : "Select the rework type"}
+        >
+          <SearchableSelect
+            options={typeOptions}
+            value={typeKey}
+            onValueChange={(val) => {
+              setTypeKey(val);
+              try { localStorage.setItem("logEntry_lastTypeKey", val); } catch {}
+            }}
+            placeholder={kind === "rejection" ? "Select rejection code..." : "Select rework code..."}
+            searchPlaceholder="Search..."
+            testId="select-type"
+          />
+          {selectedType?.zone && (
+            <p className="text-xs text-muted-foreground mt-1">{selectedType.zone}</p>
+          )}
+        </Field>
 
         {/* Row 2: Quantity + Date */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
@@ -389,7 +424,7 @@ export default function LogEntry() {
         <div className="pt-2">
           <Button
             onClick={handleSubmit}
-            disabled={isSubmitting || !partId || !typeKey}
+            disabled={isSubmitting || !partId || !typeKey || !selectedType}
             className="w-full sm:w-auto px-8"
             data-testid="button-log-entry"
           >
