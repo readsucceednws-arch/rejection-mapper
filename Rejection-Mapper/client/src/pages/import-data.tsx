@@ -1598,14 +1598,28 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
               normalizeText(cm.zone ? row[cm.zone] : "") ||
               normalizeText(findCol(row, ZONE_SLUGS));
 
-            if (!rawCodeValue && !descRaw) {
+            const rawValue = normalizeText(rawCodeValue || descRaw);
+
+            if (!rawValue) {
               result.skipped++;
               continue;
             }
 
-            const split = splitCodeAndReason(rawCodeValue || descRaw);
-            const code = normalizeCode(split.code);
-            const reason = normalizeText(descRaw || split.reason || code);
+            // Use the full value as the rejection code — do NOT split on dashes
+            // because names like "Z1- CHAMFER NG", "DENT-REWORK", "PLATING-REWORK"
+            // contain meaningful dashes that are part of the name.
+            // Only split on explicit separators: colon or pipe (e.g. "R01: Surface Defect").
+            let code: string;
+            let reason: string;
+            const explicitSep = rawValue.match(/^([^:|]+?)\s*[:|]\s*(.+)$/);
+            if (explicitSep) {
+              code   = normalizeText(explicitSep[1]).toUpperCase();
+              reason = normalizeText(explicitSep[2]);
+            } else {
+              // Full value IS the code — normalise whitespace, keep case
+              code   = rawValue.toUpperCase().replace(/\s+/g, " ").trim();
+              reason = descRaw || rawValue;
+            }
 
             if (!code) {
               result.errors.push(formatRowError(rowIndex + 1, "Missing rejection code"));
@@ -1613,11 +1627,14 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
               continue;
             }
 
-            if (existingRejKeys.has(code)) {
+            // Normalise for dedup check — strip spaces so "Z1- CHAMFER NG" and "Z1-CHAMFERNG" don't double-import
+            const codeKey = code.replace(/\s+/g, "");
+
+            if (existingRejKeys.has(codeKey)) {
               // Code already exists — if it has no zone yet and we have one, update it
               if (rawZone) {
                 const existing = localRejTypes.find(
-                  (t) => normalizeCode(t.rejectionCode) === code
+                  (t) => normalizeCode(t.rejectionCode) === codeKey
                 );
                 const hasNoZone = !existing?.type || existing.type === "rejection" || existing.type === "rework";
                 if (existing && hasNoZone) {
@@ -1653,7 +1670,7 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
             });
 
             localRejTypes.push(created);
-            existingRejKeys.add(code);
+            existingRejKeys.add(codeKey);
             result.added++;
           } catch (error) {
             result.errors.push(
@@ -1833,9 +1850,11 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
             </thead>
             <tbody>
               {rows.map((row, i) => {
-                const rawCode = (codeCol ? row[codeCol] : "") || "";
-                const { code, reason } = splitCodeAndReason(rawCode);
-                const desc = (descCol ? row[descCol] : "") || reason;
+                const rawCode = normalizeText((codeCol ? row[codeCol] : "") || "");
+                // Show full value — do NOT split on dashes (names like "Z1- CHAMFER NG" are full codes)
+                const explicitSep = rawCode.match(/^([^:|]+?)\s*[:|]\s*(.+)$/);
+                const code = explicitSep ? normalizeText(explicitSep[1]).toUpperCase() : rawCode.toUpperCase();
+                const desc = (descCol ? row[descCol] : "") || (explicitSep ? normalizeText(explicitSep[2]) : rawCode);
                 const zone = zoneCol ? row[zoneCol] : "";
 
                 return (
