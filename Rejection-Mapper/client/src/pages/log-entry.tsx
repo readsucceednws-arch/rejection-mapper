@@ -22,7 +22,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { CheckCircle2, ChevronsUpDown, Check, ClipboardList } from "lucide-react";
+import { CheckCircle2, ChevronsUpDown, Check, ClipboardList, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -49,27 +49,24 @@ interface LoggedEntry {
   remarks?: string;
 }
 
-// ── Searchable combobox ────────────────────────────────────────────────────────
+// ── Multi-select combobox ──────────────────────────────────────────────────────
 
-function SearchableSelect({
+function MultiSearchableSelect({
   options,
-  value,
-  onValueChange,
+  values,
+  onToggle,
   placeholder,
   searchPlaceholder,
   testId,
-  disabled,
 }: {
   options: { value: string; label: string; sublabel?: string; group?: string }[];
-  value: string;
-  onValueChange: (val: string) => void;
+  values: Set<string>;
+  onToggle: (val: string) => void;
   placeholder: string;
   searchPlaceholder: string;
   testId?: string;
-  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const selected = options.find((o) => o.value === value);
 
   const grouped = useMemo(() => {
     const map = new Map<string, typeof options>();
@@ -83,6 +80,27 @@ function SearchableSelect({
 
   const hasGroups = [...grouped.keys()].some((k) => k !== "");
 
+  const renderItem = (option: typeof options[0]) => (
+    <CommandItem
+      key={option.value}
+      value={`${option.label} ${option.sublabel ?? ""} ${option.group ?? ""}`}
+      onSelect={() => onToggle(option.value)}
+    >
+      <div className={cn(
+        "mr-2 h-4 w-4 shrink-0 rounded border border-border flex items-center justify-center",
+        values.has(option.value) ? "bg-primary border-primary" : "bg-background"
+      )}>
+        {values.has(option.value) && <Check className="h-3 w-3 text-primary-foreground" />}
+      </div>
+      <span className="truncate">{option.label}</span>
+      {option.sublabel && option.sublabel !== option.label && (
+        <span className="ml-2 text-xs text-muted-foreground truncate">{option.sublabel}</span>
+      )}
+    </CommandItem>
+  );
+
+  const selectedCount = values.size;
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -90,7 +108,76 @@ function SearchableSelect({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          disabled={disabled}
+          className="w-full justify-between font-normal h-10 px-3 text-left"
+          data-testid={testId}
+        >
+          <span className={cn("truncate text-sm", selectedCount === 0 && "text-muted-foreground")}>
+            {selectedCount === 0
+              ? placeholder
+              : selectedCount === 1
+              ? options.find((o) => values.has(o.value))?.label ?? placeholder
+              : `${selectedCount} selected`}
+          </span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-40" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+        <Command>
+          <CommandInput placeholder={searchPlaceholder} className="h-9" />
+          <CommandList className="max-h-72">
+            <CommandEmpty>No results found.</CommandEmpty>
+            {hasGroups
+              ? [...grouped.entries()].map(([group, opts]) => (
+                  <CommandGroup key={group} heading={group || undefined}>
+                    {opts.map(renderItem)}
+                  </CommandGroup>
+                ))
+              : [...(grouped.get("") ?? [])].map(renderItem)}
+          </CommandList>
+        </Command>
+        {selectedCount > 0 && (
+          <div className="border-t border-border px-3 py-2 flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">{selectedCount} selected</span>
+            <button
+              className="text-xs text-destructive hover:underline"
+              onClick={() => { values.forEach((v) => onToggle(v)); }}
+            >
+              Clear all
+            </button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ── Single searchable combobox (for part) ──────────────────────────────────────
+
+function SearchableSelect({
+  options,
+  value,
+  onValueChange,
+  placeholder,
+  searchPlaceholder,
+  testId,
+}: {
+  options: { value: string; label: string; sublabel?: string }[];
+  value: string;
+  onValueChange: (val: string) => void;
+  placeholder: string;
+  searchPlaceholder: string;
+  testId?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find((o) => o.value === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
           className="w-full justify-between font-normal h-10 px-3 text-left"
           data-testid={testId}
         >
@@ -105,37 +192,19 @@ function SearchableSelect({
           <CommandInput placeholder={searchPlaceholder} className="h-9" />
           <CommandList className="max-h-72">
             <CommandEmpty>No results found.</CommandEmpty>
-            {hasGroups
-              ? [...grouped.entries()].map(([group, opts]) => (
-                  <CommandGroup key={group} heading={group || undefined}>
-                    {opts.map((option) => (
-                      <CommandItem
-                        key={option.value}
-                        value={`${option.label} ${option.sublabel ?? ""} ${group}`}
-                        onSelect={() => { onValueChange(option.value); setOpen(false); }}
-                      >
-                        <Check className={cn("mr-2 h-4 w-4 shrink-0", value === option.value ? "opacity-100" : "opacity-0")} />
-                        <span className="truncate">{option.label}</span>
-                        {option.sublabel && option.sublabel !== option.label && (
-                          <span className="ml-2 text-xs text-muted-foreground truncate">{option.sublabel}</span>
-                        )}
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                ))
-              : [...(grouped.get("") ?? [])].map((option) => (
-                  <CommandItem
-                    key={option.value}
-                    value={`${option.label} ${option.sublabel ?? ""}`}
-                    onSelect={() => { onValueChange(option.value); setOpen(false); }}
-                  >
-                    <Check className={cn("mr-2 h-4 w-4 shrink-0", value === option.value ? "opacity-100" : "opacity-0")} />
-                    <span className="truncate">{option.label}</span>
-                    {option.sublabel && option.sublabel !== option.label && (
-                      <span className="ml-2 text-xs text-muted-foreground truncate">{option.sublabel}</span>
-                    )}
-                  </CommandItem>
-                ))}
+            {options.map((option) => (
+              <CommandItem
+                key={option.value}
+                value={`${option.label} ${option.sublabel ?? ""}`}
+                onSelect={() => { onValueChange(option.value); setOpen(false); }}
+              >
+                <Check className={cn("mr-2 h-4 w-4 shrink-0", value === option.value ? "opacity-100" : "opacity-0")} />
+                <span className="truncate">{option.label}</span>
+                {option.sublabel && (
+                  <span className="ml-2 text-xs text-muted-foreground truncate">{option.sublabel}</span>
+                )}
+              </CommandItem>
+            ))}
           </CommandList>
         </Command>
       </PopoverContent>
@@ -183,16 +252,13 @@ export default function LogEntry() {
   const [kind, setKind] = useState<EntryKind>(() => {
     try { return (localStorage.getItem("logEntry_lastKind") as EntryKind) || "rejection"; } catch { return "rejection"; }
   });
-  const [typeKey, setTypeKey] = useState<string>(() => {
-    try { return localStorage.getItem("logEntry_lastTypeKey") || ""; } catch { return ""; }
-  });
+  const [typeKeys, setTypeKeys] = useState<Set<string>>(new Set());
   const [quantity, setQuantity] = useState("1");
   const [remarks, setRemarks] = useState("");
   const [entryDate, setEntryDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [recentlyLogged, setRecentlyLogged] = useState<LoggedEntry[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Unified type list grouped by zone
   const allTypes = useMemo<UnifiedType[]>(() => {
     const rw: UnifiedType[] = (reworkTypes ?? []).map((t) => ({
       id: `rw-${t.id}`,
@@ -232,11 +298,26 @@ export default function LogEntry() {
     [allTypes, kind]
   );
 
-  const selectedType = allTypes.find((t) => t.id === typeKey) ?? null;
+  const selectedTypes = useMemo(
+    () => allTypes.filter((t) => typeKeys.has(t.id)),
+    [allTypes, typeKeys]
+  );
+
+  const toggleType = (id: string) => {
+    setTypeKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const removeType = (id: string) => {
+    setTypeKeys((prev) => { const next = new Set(prev); next.delete(id); return next; });
+  };
 
   const handleSubmit = async () => {
-    if (!partId || !typeKey || !quantity) {
-      toast({ title: "Missing fields", description: "Please fill in all required fields.", variant: "destructive" });
+    if (!partId || typeKeys.size === 0 || !quantity) {
+      toast({ title: "Missing fields", description: "Please select a part, at least one code, and a quantity.", variant: "destructive" });
       return;
     }
     const qty = parseInt(quantity);
@@ -244,47 +325,48 @@ export default function LogEntry() {
       toast({ title: "Invalid quantity", description: "Quantity must be a positive number.", variant: "destructive" });
       return;
     }
-    if (!selectedType) return;
 
     setIsSubmitting(true);
-    try {
-      const part = parts?.find((p) => p.id === parseInt(partId));
+    const part = parts?.find((p) => p.id === parseInt(partId));
+    const newLogged: LoggedEntry[] = [];
 
-      if (selectedType.kind === "rework") {
-        await new Promise<void>((resolve, reject) => {
-          createRework.mutate(
-            { partId: parseInt(partId), reworkTypeId: selectedType.rawId, quantity: qty, remarks: remarks || undefined, entryDate: entryDate || undefined },
-            {
-              onSuccess: (created) => {
-                setRecentlyLogged((prev) => [
-                  { id: created.id, kind: "rework", partNumber: part?.partNumber ?? "", code: selectedType.code, zone: selectedType.zone, quantity: qty, date: entryDate, remarks: remarks || undefined },
-                  ...prev.slice(0, 9),
-                ]);
-                resolve();
-              },
-              onError: reject,
-            }
-          );
-        });
-      } else {
-        await new Promise<void>((resolve, reject) => {
-          createRejection.mutate(
-            { partId: parseInt(partId), rejectionTypeId: selectedType.rawId, quantity: qty, remarks: remarks || undefined, entryDate: entryDate || undefined },
-            {
-              onSuccess: (created) => {
-                setRecentlyLogged((prev) => [
-                  { id: created.id, kind: "rejection", partNumber: part?.partNumber ?? "", code: selectedType.code, zone: selectedType.zone, quantity: qty, date: entryDate, remarks: remarks || undefined },
-                  ...prev.slice(0, 9),
-                ]);
-                resolve();
-              },
-              onError: reject,
-            }
-          );
-        });
+    try {
+      for (const t of selectedTypes) {
+        if (t.kind === "rework") {
+          await new Promise<void>((resolve, reject) => {
+            createRework.mutate(
+              { partId: parseInt(partId), reworkTypeId: t.rawId, quantity: qty, remarks: remarks || undefined, entryDate: entryDate || undefined },
+              {
+                onSuccess: (created) => {
+                  newLogged.push({ id: created.id, kind: "rework", partNumber: part?.partNumber ?? "", code: t.code, zone: t.zone, quantity: qty, date: entryDate, remarks: remarks || undefined });
+                  resolve();
+                },
+                onError: reject,
+              }
+            );
+          });
+        } else {
+          await new Promise<void>((resolve, reject) => {
+            createRejection.mutate(
+              { partId: parseInt(partId), rejectionTypeId: t.rawId, quantity: qty, remarks: remarks || undefined, entryDate: entryDate || undefined },
+              {
+                onSuccess: (created) => {
+                  newLogged.push({ id: created.id, kind: "rejection", partNumber: part?.partNumber ?? "", code: t.code, zone: t.zone, quantity: qty, date: entryDate, remarks: remarks || undefined });
+                  resolve();
+                },
+                onError: reject,
+              }
+            );
+          });
+        }
       }
 
-      toast({ title: "Entry logged", description: `${qty} × ${part?.partNumber} saved.` });
+      setRecentlyLogged((prev) => [...newLogged, ...prev].slice(0, 20));
+      toast({
+        title: `${newLogged.length} entr${newLogged.length === 1 ? "y" : "ies"} logged`,
+        description: `${qty} × ${part?.partNumber}`,
+      });
+      setTypeKeys(new Set());
       setQuantity("1");
       setRemarks("");
     } catch (err: any) {
@@ -308,10 +390,9 @@ export default function LogEntry() {
         </div>
       </div>
 
-      {/* Form grid */}
       <div className="space-y-6">
 
-        {/* Row 1: Part + Kind */}
+        {/* Row 1: Part + Kind toggle */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
           <Field label="Part Number" required hint="Select the part being logged">
             <SearchableSelect
@@ -331,32 +412,16 @@ export default function LogEntry() {
             <div className="flex rounded-md border border-border overflow-hidden h-10">
               <button
                 type="button"
-                onClick={() => {
-                  setKind("rejection");
-                  setTypeKey("");
-                  try { localStorage.setItem("logEntry_lastKind", "rejection"); } catch {}
-                }}
-                className={`flex-1 text-sm font-medium transition-colors ${
-                  kind === "rejection"
-                    ? "bg-destructive text-destructive-foreground"
-                    : "bg-background text-muted-foreground hover:bg-muted"
-                }`}
+                onClick={() => { setKind("rejection"); setTypeKeys(new Set()); try { localStorage.setItem("logEntry_lastKind", "rejection"); } catch {} }}
+                className={`flex-1 text-sm font-medium transition-colors ${kind === "rejection" ? "bg-destructive text-destructive-foreground" : "bg-background text-muted-foreground hover:bg-muted"}`}
                 data-testid="toggle-rejection"
               >
                 Rejection
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setKind("rework");
-                  setTypeKey("");
-                  try { localStorage.setItem("logEntry_lastKind", "rework"); } catch {}
-                }}
-                className={`flex-1 text-sm font-medium transition-colors border-l border-border ${
-                  kind === "rework"
-                    ? "bg-blue-500 text-white"
-                    : "bg-background text-muted-foreground hover:bg-muted"
-                }`}
+                onClick={() => { setKind("rework"); setTypeKeys(new Set()); try { localStorage.setItem("logEntry_lastKind", "rework"); } catch {} }}
+                className={`flex-1 text-sm font-medium transition-colors border-l border-border ${kind === "rework" ? "bg-blue-500 text-white" : "bg-background text-muted-foreground hover:bg-muted"}`}
                 data-testid="toggle-rework"
               >
                 Rework
@@ -365,31 +430,52 @@ export default function LogEntry() {
           </Field>
         </div>
 
-        {/* Row 2: Type code */}
+        {/* Code multi-select */}
         <Field
           label={kind === "rejection" ? "Rejection Code" : "Rework Code"}
           required
-          hint={kind === "rejection" ? "Select the rejection reason" : "Select the rework type"}
+          hint="Select one or more codes"
         >
-          <SearchableSelect
+          <MultiSearchableSelect
             options={typeOptions}
-            value={typeKey}
-            onValueChange={(val) => {
-              setTypeKey(val);
-              try { localStorage.setItem("logEntry_lastTypeKey", val); } catch {}
-            }}
-            placeholder={kind === "rejection" ? "Select rejection code..." : "Select rework code..."}
-            searchPlaceholder="Search..."
+            values={typeKeys}
+            onToggle={toggleType}
+            placeholder={kind === "rejection" ? "Select rejection code(s)..." : "Select rework code(s)..."}
+            searchPlaceholder="Search codes..."
             testId="select-type"
           />
-          {selectedType?.zone && (
-            <p className="text-xs text-muted-foreground mt-1">{selectedType.zone}</p>
+
+          {/* Selected codes as chips */}
+          {selectedTypes.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {selectedTypes.map((t) => (
+                <span
+                  key={t.id}
+                  className={cn(
+                    "inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border font-medium",
+                    t.kind === "rework"
+                      ? "bg-blue-500/10 text-blue-700 border-blue-300"
+                      : "bg-destructive/10 text-destructive border-destructive/30"
+                  )}
+                >
+                  {t.code}
+                  {t.zone && <span className="opacity-60 font-normal">· {t.zone}</span>}
+                  <button
+                    type="button"
+                    onClick={() => removeType(t.id)}
+                    className="ml-0.5 opacity-50 hover:opacity-100 transition-opacity"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
           )}
         </Field>
 
-        {/* Row 2: Quantity + Date */}
+        {/* Quantity + Date */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-          <Field label="Quantity" required hint="Number of units">
+          <Field label="Quantity" required hint="Number of units per code">
             <Input
               type="number"
               min={1}
@@ -410,8 +496,8 @@ export default function LogEntry() {
           </Field>
         </div>
 
-        {/* Row 3: Remarks full width */}
-        <Field label="Remarks" hint="Any additional notes or observations (optional)">
+        {/* Remarks */}
+        <Field label="Remarks" hint="Any additional notes (optional)">
           <Input
             value={remarks}
             onChange={(e) => setRemarks(e.target.value)}
@@ -424,14 +510,18 @@ export default function LogEntry() {
         <div className="pt-2">
           <Button
             onClick={handleSubmit}
-            disabled={isSubmitting || !partId || !typeKey || !selectedType}
+            disabled={isSubmitting || !partId || typeKeys.size === 0}
             className="w-full sm:w-auto px-8"
             data-testid="button-log-entry"
           >
             {isSubmitting
               ? <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin mr-2" />
               : <CheckCircle2 className="w-4 h-4 mr-2" />}
-            {isSubmitting ? "Saving…" : "Log Entry"}
+            {isSubmitting
+              ? "Saving…"
+              : typeKeys.size <= 1
+              ? "Log Entry"
+              : `Log ${typeKeys.size} Entries`}
           </Button>
         </div>
       </div>
