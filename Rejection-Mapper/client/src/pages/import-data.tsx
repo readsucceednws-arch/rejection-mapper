@@ -3,8 +3,8 @@ import * as XLSX from "xlsx";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useParts, useCreatePart } from "@/hooks/use-parts";
-import { useRejectionTypes, useCreateRejectionType } from "@/hooks/use-rejection-types";
-import { useReworkTypes, useCreateReworkType } from "@/hooks/use-rework-types";
+import { useRejectionTypes, useCreateRejectionType, useUpdateRejectionType } from "@/hooks/use-rejection-types";
+import { useReworkTypes, useCreateReworkType, useUpdateReworkType } from "@/hooks/use-rework-types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -1377,7 +1377,9 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
   const { data: existingReworkTypes } = useReworkTypes();
   const createPart = useCreatePart();
   const createRejType = useCreateRejectionType();
+  const updateRejType = useUpdateRejectionType();
   const createReworkType = useCreateReworkType();
+  const updateReworkType = useUpdateReworkType();
 
   const config = TAB_CONFIG[importType];
 
@@ -1612,7 +1614,27 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
             }
 
             if (existingRejKeys.has(code)) {
-              result.skipped++;
+              // Code already exists — if it has no zone yet and we have one, update it
+              if (rawZone) {
+                const existing = localRejTypes.find(
+                  (t) => normalizeCode(t.rejectionCode) === code
+                );
+                const hasNoZone = !existing?.type || existing.type === "rejection" || existing.type === "rework";
+                if (existing && hasNoZone) {
+                  await new Promise<void>((resolve) => {
+                    updateRejType.mutate(
+                      { id: existing.id, data: { type: rawZone } },
+                      { onSuccess: () => resolve(), onError: () => resolve() }
+                    );
+                  });
+                  existing.type = rawZone;
+                  result.added++;
+                } else {
+                  result.skipped++;
+                }
+              } else {
+                result.skipped++;
+              }
               continue;
             }
 
@@ -1676,7 +1698,27 @@ function TypedImportPanel({ importType }: { importType: TabImportType }) {
             }
 
             if (existingReworkKeys.has(code)) {
-              result.skipped++;
+              // Code already exists — if it has no zone yet and we have one, update it
+              if (rawZone) {
+                const existing = localReworkTypes.find(
+                  (t) => normalizeCode(t.reworkCode) === code
+                );
+                const hasNoZone = !existing?.zone;
+                if (existing && hasNoZone) {
+                  await new Promise<void>((resolve) => {
+                    updateReworkType.mutate(
+                      { id: existing.id, data: { zone: rawZone } },
+                      { onSuccess: () => resolve(), onError: () => resolve() }
+                    );
+                  });
+                  existing.zone = rawZone;
+                  result.added++;
+                } else {
+                  result.skipped++;
+                }
+              } else {
+                result.skipped++;
+              }
               continue;
             }
 
