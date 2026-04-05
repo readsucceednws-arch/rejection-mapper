@@ -5,7 +5,6 @@ import {
   useAnalyticsInsights,
   AnalyticsFilters 
 } from "@/hooks/use-analytics";
-import { exportWeeklyReportCSV, exportMonthlyReportCSV } from "@/hooks/use-reports";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -143,11 +142,9 @@ export default function AnalyticsDashboard() {
           </p>
         </div>
         <div className="flex space-x-2">
-          <Button variant="outline" onClick={() => exportWeeklyReportCSV()}>
             <Download className="h-4 w-4 mr-2" />
             Weekly Report
           </Button>
-          <Button variant="outline" onClick={() => exportMonthlyReportCSV()}>
             <FileText className="h-4 w-4 mr-2" />
             Monthly Report
           </Button>
