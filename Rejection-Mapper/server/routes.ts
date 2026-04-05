@@ -8,6 +8,11 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import type { User } from "@shared/schema";
 
+// Import new routes
+import analyticsRoutes from "./routes/analytics";
+import reportingRoutes from "./routes/reporting";
+import insightsRoutes from "./routes/insights";
+
 function getOrgId(req: any): number {
   const user = req.user as User;
   if (!user?.organizationId) throw new Error("No organization associated with this account");
@@ -1552,6 +1557,11 @@ export async function registerRoutes(
       importId,
     });
   });
+
+  // --- NEW ANALYTICS & REPORTING ROUTES ---
+  app.use("/api/analytics", analyticsRoutes);
+  app.use("/api/reporting", reportingRoutes);
+  app.use("/api/insights", insightsRoutes);
 
   return httpServer;
 }
