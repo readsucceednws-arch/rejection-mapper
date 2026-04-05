@@ -9,7 +9,6 @@ import { exportWeeklyReportCSV, exportMonthlyReportCSV } from "@/hooks/use-repor
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import TemplateSelectorFunctional from "@/components/template-selector-functional";
 import {
   BarChart,
   Bar,
@@ -134,7 +133,6 @@ export default function AnalyticsDashboard() {
 
   return (
     <div className="space-y-6">
-      <TemplateSelectorFunctional />
       
       {/* Header with Export */}
       <div className="flex justify-between items-center">
