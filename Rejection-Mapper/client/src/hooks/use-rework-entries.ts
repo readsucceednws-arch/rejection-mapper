@@ -12,6 +12,9 @@ interface ReworkFilters {
 export function useReworkEntries(filters?: ReworkFilters) {
   return useQuery<ReworkEntryResponse[]>({
     queryKey: [api.reworkEntries.list.path, filters],
+    staleTime: 0,
+    refetchOnMount: "always" as const,
+    refetchInterval: 30000,
     queryFn: async () => {
       const url = new URL(api.reworkEntries.list.path, window.location.origin);
       if (filters?.startDate) url.searchParams.set("startDate", filters.startDate);
