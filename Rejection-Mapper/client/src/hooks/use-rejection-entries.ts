@@ -13,6 +13,9 @@ type EntryFilters = {
 export function useRejectionEntries(filters?: EntryFilters) {
   return useQuery({
     queryKey: [api.rejectionEntries.list.path, filters],
+    staleTime: 0,
+    refetchOnMount: "always" as const,
+    refetchInterval: 30000,
     queryFn: async () => {
       const url = new URL(api.rejectionEntries.list.path, window.location.origin);
       if (filters?.startDate) url.searchParams.append("startDate", filters.startDate);
