@@ -54,15 +54,16 @@ function generateInviteCode(): string {
 }
 
 function getStartOfDay(dateStr: string): Date {
-  const date = new Date(dateStr);
-  date.setHours(0, 0, 0, 0);
-  return date;
+  // Parse as IST (UTC+5:30) — treat the date string as midnight IST
+  const [year, month, day] = dateStr.split("-").map(Number);
+  // Midnight IST = 18:30 previous day UTC
+  return new Date(Date.UTC(year, month - 1, day) - (5.5 * 60 * 60 * 1000));
 }
 
 function getEndOfDay(dateStr: string): Date {
-  const date = new Date(dateStr);
-  date.setHours(23, 59, 59, 999);
-  return date;
+  // End of day IST = 23:59:59.999 IST = 18:29:59.999 UTC next day
+  const [year, month, day] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + 1) - (5.5 * 60 * 60 * 1000) - 1);
 }
 
 export interface IStorage {
