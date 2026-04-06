@@ -636,7 +636,8 @@ export async function registerRoutes(
       const user = req.user as User;
       const input = api.rejectionEntries.create.input.parse(req.body);
       const { entryDate, ...rest } = input;
-      const entryDateObj = entryDate ? new Date(entryDate) : undefined;
+      // Parse as full ISO string to preserve the actual logged time
+      const entryDateObj = entryDate ? new Date(entryDate) : new Date();
 
       const entryPayload = {
         ...rest,
@@ -797,7 +798,8 @@ export async function registerRoutes(
         quantity: z.coerce.number().default(1),
       }).parse(req.body);
       const { entryDate, ...rest } = input;
-      const entryDateObj = entryDate ? new Date(entryDate) : undefined;
+      // Parse as full ISO string to preserve the actual logged time
+      const entryDateObj = entryDate ? new Date(entryDate) : new Date();
 
       // Duplicate check: same part + type + quantity on the same day
       const rwDate = entryDateObj ?? new Date();
