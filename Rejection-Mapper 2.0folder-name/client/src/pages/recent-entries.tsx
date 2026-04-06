@@ -694,16 +694,11 @@ export default function RecentEntries() {
   );
 
   const rejectionOnlyEntries = allEntries.filter(
-    (e) =>
-      e.source === "rejection" &&
-      (e.data as RejectionEntryResponse).rejectionType.type === "rejection"
+    (e) => e.source === "rejection"
   );
 
   const reworkOnlyEntries = allEntries.filter(
-    (e) =>
-      e.source === "rework" ||
-      (e.source === "rejection" &&
-        (e.data as RejectionEntryResponse).rejectionType.type === "rework")
+    (e) => e.source === "rework"
   );
 
   const currentEntries =
