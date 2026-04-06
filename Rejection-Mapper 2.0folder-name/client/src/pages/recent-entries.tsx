@@ -2,6 +2,11 @@ import { useRef, useState, useEffect } from "react";
 import { api } from "@shared/routes";
 import * as XLSX from "xlsx";
 import { format } from "date-fns";
+
+// Convert UTC date to IST (UTC+5:30) for display
+function toIST(date: Date): Date {
+  return new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
+}
 import {
   useRejectionEntries,
   useCreateRejectionEntry,
@@ -440,7 +445,7 @@ function EntriesTable({
                       )}
 
                       <TableCell className="whitespace-nowrap font-medium text-muted-foreground text-sm">
-                        {format(new Date(e.date), "MMM d, yyyy h:mm a")}
+                        {format(toIST(new Date(e.date)), "MMM d, yyyy h:mm a")} IST
                       </TableCell>
 
                       <TableCell className="font-semibold text-primary">
@@ -544,7 +549,7 @@ function EntriesTable({
                     )}
 
                     <TableCell className="whitespace-nowrap font-medium text-muted-foreground text-sm">
-                      {format(new Date(e.date), "MMM d, yyyy h:mm a")}
+                      {format(toIST(new Date(e.date)), "MMM d, yyyy h:mm a")} IST
                     </TableCell>
 
                     <TableCell className="font-semibold text-primary">
