@@ -160,6 +160,14 @@ export default function LogEntry() {
     try { return (localStorage.getItem("logEntry_lastKind") as EntryKind) || "rejection"; } catch { return "rejection"; }
   });
   const [entryDate, setEntryDate] = useState(format(new Date(), "yyyy-MM-dd"));
+  // Track the actual submission time so it gets stored with the entry
+  const getEntryDateTime = () => {
+    const now = new Date();
+    // Combine selected date with current time
+    const [year, month, day] = entryDate.split("-").map(Number);
+    const dt = new Date(year, month - 1, day, now.getHours(), now.getMinutes(), now.getSeconds());
+    return dt.toISOString();
+  };
   const [remarks, setRemarks] = useState("");
   const [rows, setRows] = useState<EntryRow[]>([{ typeId: null, quantity: "1" }]);
   const [recentlyLogged, setRecentlyLogged] = useState<LoggedEntry[]>([]);
@@ -246,7 +254,7 @@ export default function LogEntry() {
         await new Promise<void>((resolve, reject) => {
           if (kind === "rework") {
             createRework.mutate(
-              { partId: parseInt(partId, 10), reworkTypeId: row.typeId!, quantity: qty, remarks: remarks || undefined, entryDate },
+              { partId: parseInt(partId, 10), reworkTypeId: row.typeId!, quantity: qty, remarks: remarks || undefined, entryDate: getEntryDateTime() },
               {
                 onSuccess: (created) => {
                   newLogged.push({ id: created.id, kind: "rework", partNumber: part?.partNumber ?? "", code: type.code, zone: type.zone, quantity: qty, date: entryDate });
@@ -257,7 +265,7 @@ export default function LogEntry() {
             );
           } else {
             createRejection.mutate(
-              { partId: parseInt(partId, 10), rejectionTypeId: row.typeId!, quantity: qty, remarks: remarks || undefined, entryDate },
+              { partId: parseInt(partId, 10), rejectionTypeId: row.typeId!, quantity: qty, remarks: remarks || undefined, entryDate: getEntryDateTime() },
               {
                 onSuccess: (created) => {
                   newLogged.push({ id: created.id, kind: "rejection", partNumber: part?.partNumber ?? "", code: type.code, zone: type.zone, quantity: qty, date: entryDate });
