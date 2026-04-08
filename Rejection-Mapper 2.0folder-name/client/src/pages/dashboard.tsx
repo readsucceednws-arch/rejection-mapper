@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { useReportSummary } from "@/hooks/use-reports";
 import { usePartWiseAnalytics, useMonthWiseAnalytics, useCostAnalytics, useZoneWiseAnalytics } from "@/hooks/use-analytics";
 import { useRejectionEntries } from "@/hooks/use-rejection-entries";
@@ -209,6 +209,27 @@ function TabFilterBar({
         )}
       </div>
     </Card>
+  );
+}
+
+// Reusable angled tick for XAxis labels — properly anchors rotation at the label start
+function CustomXAxisTick({ x, y, payload, maxLen = 16 }: { x?: number; y?: number; payload?: { value: string }; maxLen?: number }) {
+  const label = payload?.value ?? "";
+  const display = label.length > maxLen ? label.slice(0, maxLen) + "…" : label;
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text
+        x={0}
+        y={0}
+        dy={8}
+        textAnchor="end"
+        fill="hsl(var(--muted-foreground))"
+        fontSize={10}
+        transform="rotate(-40)"
+      >
+        {display}
+      </text>
+    </g>
   );
 }
 
@@ -691,9 +712,9 @@ export default function Dashboard() {
                     <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
                   ) : summary && summary.length > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={summary} margin={{ top: 10, right: 10, left: -20, bottom: 20 }}>
+                      <BarChart data={summary} margin={{ top: 10, right: 10, left: -20, bottom: 70 }}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                        <XAxis dataKey="reason" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} angle={-40} textAnchor="end" height={60} />
+                        <XAxis dataKey="reason" axisLine={false} tickLine={false} height={80} interval={0} tick={<CustomXAxisTick maxLen={20} />} />
                         <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                         <Tooltip cursor={{ fill: "hsl(var(--muted)/0.5)" }} contentStyle={{ borderRadius: "8px", border: "1px solid hsl(var(--border))" }} />
                         <Bar dataKey="totalQuantity" name="Quantity" radius={[4, 4, 0, 0]}>
@@ -824,27 +845,7 @@ export default function Dashboard() {
                         tickLine={false}
                         height={90}
                         interval={0}
-                        tick={(props: any) => {
-                          const { x, y, payload } = props;
-                          const label: string = payload.value ?? "";
-                          const maxLen = 18;
-                          const display = label.length > maxLen ? label.slice(0, maxLen) + "…" : label;
-                          return (
-                            <g transform={`translate(${x},${y})`}>
-                              <text
-                                x={0}
-                                y={0}
-                                dy={8}
-                                textAnchor="end"
-                                fill="hsl(var(--muted-foreground))"
-                                fontSize={10}
-                                transform="rotate(-40)"
-                              >
-                                {display}
-                              </text>
-                            </g>
-                          );
-                        }}
+                        tick={<CustomXAxisTick maxLen={18} />}
                       />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                       <Tooltip
@@ -897,9 +898,8 @@ export default function Dashboard() {
                         const rejCauses = causes ? Array.from(causes.rejectionCauses.entries()).sort((a, b) => b[1] - a[1]) : [];
                         const rwCauses = causes ? Array.from(causes.reworkCauses.entries()).sort((a, b) => b[1] - a[1]) : [];
                         return (
-                          <>
+                          <React.Fragment key={row.partNumber}>
                             <tr
-                              key={i}
                               className={`border-b border-border/30 transition-colors cursor-pointer ${isSelected ? "bg-muted/50" : "hover:bg-muted/30"}`}
                               onClick={() => setSelectedSummaryPart(isSelected ? null : row.partNumber)}
                             >
@@ -915,7 +915,7 @@ export default function Dashboard() {
                               <td className="py-2 text-right font-bold">{row.totalQuantity}</td>
                             </tr>
                             {isSelected && (
-                              <tr key={`${i}-detail`} className="border-b border-border/30 bg-muted/20">
+                              <tr className="border-b border-border/30 bg-muted/20">
                                 <td colSpan={5} className="py-3 px-4">
                                   <div className="flex flex-wrap gap-6">
                                     {/* Rejection causes */}
@@ -972,7 +972,7 @@ export default function Dashboard() {
                                 </td>
                               </tr>
                             )}
-                          </>
+                          </React.Fragment>
                         );
                       })}
                     </tbody>
@@ -1244,9 +1244,9 @@ export default function Dashboard() {
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
                 ) : filteredCostTableData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={filteredCostTableData} margin={{ top: 10, right: 20, left: 10, bottom: 60 }}>
+                    <BarChart data={filteredCostTableData} margin={{ top: 10, right: 20, left: 10, bottom: 80 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                      <XAxis dataKey="partNumber" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} angle={-40} textAnchor="end" height={70} />
+                      <XAxis dataKey="partNumber" axisLine={false} tickLine={false} height={90} interval={0} tick={<CustomXAxisTick maxLen={18} />} />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${v.toLocaleString("en-IN")}`} />
                       <Tooltip
                         cursor={{ fill: "hsl(var(--muted)/0.4)" }}
@@ -1375,9 +1375,9 @@ export default function Dashboard() {
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
                 ) : effectiveZoneData && effectiveZoneData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={effectiveZoneData} margin={{ top: 10, right: 20, left: -10, bottom: 40 }}>
+                    <BarChart data={effectiveZoneData} margin={{ top: 10, right: 20, left: -10, bottom: 70 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                      <XAxis dataKey="zone" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} angle={-30} textAnchor="end" height={55} />
+                      <XAxis dataKey="zone" axisLine={false} tickLine={false} height={80} interval={0} tick={<CustomXAxisTick maxLen={20} />} />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                       <Tooltip
                         cursor={{ fill: "hsl(var(--muted)/0.4)" }}
@@ -1414,9 +1414,9 @@ export default function Dashboard() {
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
                 ) : effectiveZoneData && effectiveZoneData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={effectiveZoneData} margin={{ top: 10, right: 20, left: -10, bottom: 40 }}>
+                    <LineChart data={effectiveZoneData} margin={{ top: 10, right: 20, left: -10, bottom: 70 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                      <XAxis dataKey="zone" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} angle={-30} textAnchor="end" height={55} />
+                      <XAxis dataKey="zone" axisLine={false} tickLine={false} height={80} interval={0} tick={<CustomXAxisTick maxLen={20} />} />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                       <Tooltip
                         contentStyle={{ borderRadius: "8px", border: "1px solid hsl(var(--border))" }}
