@@ -252,6 +252,10 @@ export default function Dashboard() {
   const [rejectionWiseTopN, setRejectionWiseTopN] = useState<number>(10);
   const [rejectionWiseSortOrder, setRejectionWiseSortOrder] = useState<"asc" | "desc">("desc");
 
+  // Cost Wise Filters
+  const [costWiseTopN, setCostWiseTopN] = useState<number>(10);
+  const [costWiseSortOrder, setCostWiseSortOrder] = useState<"asc" | "desc">("desc");
+
   // Part Summary drill-down
   const [selectedSummaryPart, setSelectedSummaryPart] = useState<string | null>(null);
 
@@ -542,9 +546,13 @@ export default function Dashboard() {
   }, [effectiveCostData]);
   const filteredCostTableData = useMemo(() => {
     if (!normalizedCostData.length) return [];
-    if (selectedCostPart === "all") return normalizedCostData;
-    return normalizedCostData.filter((r) => r.partNumber === selectedCostPart);
-  }, [normalizedCostData, selectedCostPart]);
+    let data = selectedCostPart === "all" ? normalizedCostData : normalizedCostData.filter((r) => r.partNumber === selectedCostPart);
+    data = [...data].sort((a, b) =>
+      costWiseSortOrder === "desc" ? b.rejectionCost - a.rejectionCost : a.rejectionCost - b.rejectionCost
+    );
+    if (costWiseTopN > 0 && costWiseTopN !== -1) data = data.slice(0, costWiseTopN);
+    return data;
+  }, [normalizedCostData, selectedCostPart, costWiseTopN, costWiseSortOrder]);
 
   const totalRejectionCost = filteredCostTableData.reduce((s, r) => s + r.rejectionCost, 0);
   const totalReworkCost = filteredCostTableData.reduce((s, r) => s + r.reworkCost, 0);
@@ -837,7 +845,7 @@ export default function Dashboard() {
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
                 ) : filteredPartData && filteredPartData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={filteredPartData} margin={{ top: 10, right: 20, left: -10, bottom: 80 }}>
+                    <BarChart data={filteredPartData} margin={{ top: 24, right: 20, left: -10, bottom: 80 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                       <XAxis
                         dataKey="partNumber"
@@ -858,12 +866,34 @@ export default function Dashboard() {
                         }}
                       />
                       <Legend formatter={(value) => <span className="text-xs capitalize">{value === "rejections" ? "Rejections" : "Reworks"}</span>} />
-                      <Bar dataKey="rejections" name="rejections" stackId="a" fill={REJECTION_COLOR}>
-                        <LabelList dataKey="rejections" position="top" className="fill-muted-foreground" fontSize={10} />
-                      </Bar>
-                      <Bar dataKey="reworks" name="reworks" stackId="a" fill={REWORK_COLOR} radius={[4, 4, 0, 0]}>
-                        <LabelList dataKey="reworks" position="top" className="fill-muted-foreground" fontSize={10} />
-                      </Bar>
+                      <Bar dataKey="rejections" name="rejections" stackId="a" fill={REJECTION_COLOR}
+                        label={(props: any) => {
+                          const { x, y, width, index } = props;
+                          const row = filteredPartData[index];
+                          if (!row || row.reworks > 0) return null; // only render here when reworks=0 (this is the top bar)
+                          const total = row.rejections ?? 0;
+                          if (!total) return null;
+                          return (
+                            <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={9} fill="hsl(var(--muted-foreground))">
+                              {total}
+                            </text>
+                          );
+                        }}
+                      />
+                      <Bar dataKey="reworks" name="reworks" stackId="a" fill={REWORK_COLOR} radius={[4, 4, 0, 0]}
+                        label={(props: any) => {
+                          const { x, y, width, index } = props;
+                          const row = filteredPartData[index];
+                          if (!row || row.reworks === 0) return null; // only render here when reworks>0 (this is the top bar)
+                          const total = (row.rejections ?? 0) + (row.reworks ?? 0);
+                          if (!total) return null;
+                          return (
+                            <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={9} fill="hsl(var(--muted-foreground))">
+                              {total}
+                            </text>
+                          );
+                        }}
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
@@ -897,6 +927,8 @@ export default function Dashboard() {
                         const causes = partCausesData.get(row.partNumber);
                         const rejCauses = causes ? Array.from(causes.rejectionCauses.entries()).sort((a, b) => b[1] - a[1]) : [];
                         const rwCauses = causes ? Array.from(causes.reworkCauses.entries()).sort((a, b) => b[1] - a[1]) : [];
+                        const totalRej = rejCauses.reduce((s, [, q]) => s + q, 0);
+                        const totalRw = rwCauses.reduce((s, [, q]) => s + q, 0);
                         return (
                           <React.Fragment key={row.partNumber}>
                             <tr
@@ -929,14 +961,14 @@ export default function Dashboard() {
                                       ) : (
                                         <div className="space-y-1.5">
                                           {rejCauses.map(([reason, qty]) => {
-                                            const pct = row.rejections > 0 ? Math.round((qty / row.rejections) * 100) : 0;
+                                            const pct = totalRej > 0 ? Math.round((qty / totalRej) * 100) : 0;
                                             return (
                                               <div key={reason} className="flex items-center gap-2">
                                                 <div className="flex-1 text-xs truncate text-foreground">{reason}</div>
                                                 <div className="w-24 h-1.5 bg-border rounded-full overflow-hidden">
                                                   <div className="h-full bg-destructive rounded-full" style={{ width: `${pct}%` }} />
                                                 </div>
-                                                <div className="text-xs font-medium w-8 text-right text-destructive">{qty}</div>
+                                                <div className="text-xs font-medium w-12 text-right text-destructive">{qty}</div>
                                               </div>
                                             );
                                           })}
@@ -954,14 +986,14 @@ export default function Dashboard() {
                                       ) : (
                                         <div className="space-y-1.5">
                                           {rwCauses.map(([reason, qty]) => {
-                                            const pct = row.reworks > 0 ? Math.round((qty / row.reworks) * 100) : 0;
+                                            const pct = totalRw > 0 ? Math.round((qty / totalRw) * 100) : 0;
                                             return (
                                               <div key={reason} className="flex items-center gap-2">
                                                 <div className="flex-1 text-xs truncate text-foreground">{reason}</div>
                                                 <div className="w-24 h-1.5 bg-border rounded-full overflow-hidden">
                                                   <div className="h-full bg-blue-500 rounded-full" style={{ width: `${pct}%` }} />
                                                 </div>
-                                                <div className="text-xs font-medium w-8 text-right text-blue-500">{qty}</div>
+                                                <div className="text-xs font-medium w-12 text-right text-blue-500">{qty}</div>
                                               </div>
                                             );
                                           })}
@@ -1205,6 +1237,41 @@ export default function Dashboard() {
 
         {/* ── TAB 4: COST ANALYSIS ── */}
         <TabsContent value="cost" className="space-y-6">
+
+          {/* Cost Wise Display Options */}
+          <Card className="p-3 flex flex-wrap items-end gap-3 border-border/50 bg-card shadow-sm">
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-muted-foreground" />
+              <span className="text-xs font-medium text-muted-foreground">Display Options:</span>
+            </div>
+            <div className="grid gap-1">
+              <Label className="text-xs text-muted-foreground">Show Top</Label>
+              <Select value={costWiseTopN.toString()} onValueChange={(v) => setCostWiseTopN(parseInt(v))}>
+                <SelectTrigger className="h-8 text-xs w-[120px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="10">Top 10</SelectItem>
+                  <SelectItem value="20">Top 20</SelectItem>
+                  <SelectItem value="50">Top 50</SelectItem>
+                  <SelectItem value="-1">All</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1">
+              <Label className="text-xs text-muted-foreground">Sort Order</Label>
+              <Select value={costWiseSortOrder} onValueChange={(v) => setCostWiseSortOrder(v as "asc" | "desc")}>
+                <SelectTrigger className="h-8 text-xs w-[140px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="desc">Highest First (↓)</SelectItem>
+                  <SelectItem value="asc">Lowest First (↑)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </Card>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <Card className="hover-elevate border-destructive/20 bg-gradient-to-br from-destructive/5 to-transparent">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -1244,7 +1311,7 @@ export default function Dashboard() {
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
                 ) : filteredCostTableData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={filteredCostTableData} margin={{ top: 10, right: 20, left: 10, bottom: 80 }}>
+                    <BarChart data={filteredCostTableData} margin={{ top: 24, right: 20, left: 10, bottom: 80 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                       <XAxis dataKey="partNumber" axisLine={false} tickLine={false} height={90} interval={0} tick={<CustomXAxisTick maxLen={18} />} />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${v.toLocaleString("en-IN")}`} />
@@ -1257,9 +1324,18 @@ export default function Dashboard() {
                           return `${label}${part?.description ? ` — ${part.description}` : ""} (₹${part?.price}/unit)`;
                         }}
                       />
-                      <Bar dataKey="rejectionCost" name="rejectionCost" stackId="a" fill={REJECTION_COLOR} radius={[4, 4, 0, 0]}>
-                        <LabelList dataKey="rejectionCost" position="top" className="fill-muted-foreground" fontSize={10} formatter={(v: number) => `₹${Math.round(Number(v) || 0)}`} />
-                      </Bar>
+                      <Bar dataKey="rejectionCost" name="rejectionCost" fill={REJECTION_COLOR} radius={[4, 4, 0, 0]}
+                        label={(props: any) => {
+                          const { x, y, width, value } = props;
+                          if (!value) return null;
+                          const formatted = `₹${Math.round(Number(value) || 0).toLocaleString("en-IN")}`;
+                          return (
+                            <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={9} fill="hsl(var(--muted-foreground))">
+                              {formatted}
+                            </text>
+                          );
+                        }}
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
@@ -1375,7 +1451,7 @@ export default function Dashboard() {
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
                 ) : effectiveZoneData && effectiveZoneData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={effectiveZoneData} margin={{ top: 10, right: 20, left: -10, bottom: 70 }}>
+                    <BarChart data={effectiveZoneData} margin={{ top: 24, right: 20, left: -10, bottom: 70 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                       <XAxis dataKey="zone" axisLine={false} tickLine={false} height={80} interval={0} tick={<CustomXAxisTick maxLen={20} />} />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
@@ -1385,12 +1461,34 @@ export default function Dashboard() {
                         formatter={(value, name) => [value, name === "rejections" ? "Rejections" : "Reworks"]}
                       />
                       <Legend formatter={(value) => <span className="text-xs capitalize">{value === "rejections" ? "Rejections" : "Reworks"}</span>} />
-                      <Bar dataKey="rejections" name="rejections" stackId="a" fill={REJECTION_COLOR}>
-                        <LabelList dataKey="rejections" position="top" className="fill-muted-foreground" fontSize={10} />
-                      </Bar>
-                      <Bar dataKey="reworks" name="reworks" stackId="a" fill={REWORK_COLOR} radius={[4, 4, 0, 0]}>
-                        <LabelList dataKey="reworks" position="top" className="fill-muted-foreground" fontSize={10} />
-                      </Bar>
+                      <Bar dataKey="rejections" name="rejections" stackId="a" fill={REJECTION_COLOR}
+                        label={(props: any) => {
+                          const { x, y, width, index } = props;
+                          const row = effectiveZoneData[index];
+                          if (!row || row.reworks > 0) return null;
+                          const total = row.rejections ?? 0;
+                          if (!total) return null;
+                          return (
+                            <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={9} fill="hsl(var(--muted-foreground))">
+                              {total}
+                            </text>
+                          );
+                        }}
+                      />
+                      <Bar dataKey="reworks" name="reworks" stackId="a" fill={REWORK_COLOR} radius={[4, 4, 0, 0]}
+                        label={(props: any) => {
+                          const { x, y, width, index } = props;
+                          const row = effectiveZoneData[index];
+                          if (!row || row.reworks === 0) return null;
+                          const total = (row.rejections ?? 0) + (row.reworks ?? 0);
+                          if (!total) return null;
+                          return (
+                            <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={9} fill="hsl(var(--muted-foreground))">
+                              {total}
+                            </text>
+                          );
+                        }}
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
