@@ -548,7 +548,7 @@ export default function Dashboard() {
 
   const totalRejectionCost = filteredCostTableData.reduce((s, r) => s + r.rejectionCost, 0);
   const totalReworkCost = filteredCostTableData.reduce((s, r) => s + r.reworkCost, 0);
-  const grandTotalCost = totalRejectionCost + totalReworkCost;
+  const grandTotalCost = totalRejectionCost;
 
   const fmt = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
@@ -1228,7 +1228,7 @@ export default function Dashboard() {
                 <div className="text-2xl font-display font-bold text-foreground">
                   {isLoadingCost ? "..." : fmt(grandTotalCost)}
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">Combined rejection + rework cost</p>
+                <p className="text-xs text-muted-foreground mt-1">Total cost of rejected parts</p>
               </CardContent>
             </Card>
           </div>
@@ -1311,7 +1311,7 @@ export default function Dashboard() {
                           <td className="py-2 pr-4 text-right text-muted-foreground">{fmt(row.price)}</td>
                           <td className="py-2 pr-4 text-right text-destructive">{row.rejectionQty}</td>
                           <td className="py-2 pr-4 text-right text-destructive font-medium">{fmt(row.rejectionCost)}</td>
-                          <td className="py-2 text-right font-bold">{fmt(row.totalCost)}</td>
+                          <td className="py-2 text-right font-bold">{fmt(row.rejectionCost)}</td>
                         </tr>
                       )) : (
                         <tr>
@@ -1319,9 +1319,9 @@ export default function Dashboard() {
                         </tr>
                       )}
                       <tr className="border-t-2 border-border bg-muted/20">
-                        <td colSpan={3} className="py-2 pr-4 font-bold">Total</td>
+                        <td colSpan={4} className="py-2 pr-4 font-bold">Total</td>
                         <td className="py-2 pr-4 text-right text-destructive font-bold">{fmt(totalRejectionCost)}</td>
-                        <td className="py-2 text-right font-bold text-primary">{fmt(grandTotalCost)}</td>
+                        <td className="py-2 text-right font-bold text-primary">{fmt(totalRejectionCost)}</td>
                       </tr>
                     </tbody>
                   </table>
