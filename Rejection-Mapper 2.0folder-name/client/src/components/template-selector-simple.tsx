@@ -16,17 +16,6 @@ const templates = [
       quantity: 'Quantity'
     }
   },
-  {
-    id: 'bakery',
-    name: 'Bakery',
-    description: 'For bakery and food service businesses',
-    labels: {
-      zone: 'Kitchen Area',
-      partNumber: 'Product Name',
-      type: 'Quality Issue',
-      quantity: 'Quantity'
-    }
-  }
 ];
 
 export default function TemplateSelectorSimple() {
