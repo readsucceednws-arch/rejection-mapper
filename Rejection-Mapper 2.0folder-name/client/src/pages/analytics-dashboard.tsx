@@ -263,13 +263,13 @@ export default function AnalyticsDashboard() {
             <CardDescription>Issues by {labels.zone.toLowerCase()}</CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={categoryChartData}>
+            <ResponsiveContainer width="100%" height={320}>
+              <BarChart data={categoryChartData} margin={{ top: 10, right: 10, left: -10, bottom: 70 }}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} height={80} interval={0} tick={(props: any) => { const { x, y, payload } = props; const label = payload.value ?? ""; const d = label.length > 22 ? label.slice(0, 22) + "…" : label; return <g transform={`translate(${x},${y})`}><text x={0} y={0} dy={8} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={10} transform="rotate(-40)">{d}</text></g>; }} />
                 <YAxis tick={{ fontSize: 12 }} />
                 <Tooltip formatter={(value: any) => [value, 'Issues']} />
-                <Bar dataKey="issues" fill="#8884d8" />
+                <Bar dataKey="issues" fill="#8884d8" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
@@ -285,13 +285,13 @@ export default function AnalyticsDashboard() {
             <CardDescription>Most frequent issue types</CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={issueTypeChartData}>
+            <ResponsiveContainer width="100%" height={320}>
+              <BarChart data={issueTypeChartData} margin={{ top: 10, right: 10, left: -10, bottom: 70 }}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} height={80} interval={0} tick={(props: any) => { const { x, y, payload } = props; const label = payload.value ?? ""; const d = label.length > 22 ? label.slice(0, 22) + "…" : label; return <g transform={`translate(${x},${y})`}><text x={0} y={0} dy={8} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={10} transform="rotate(-40)">{d}</text></g>; }} />
                 <YAxis tick={{ fontSize: 12 }} />
                 <Tooltip formatter={(value: any) => [value, 'Issues']} />
-                <Bar dataKey="count" fill="#00C49F" />
+                <Bar dataKey="count" fill="#00C49F" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
@@ -304,13 +304,13 @@ export default function AnalyticsDashboard() {
             <CardDescription>Most affected {labels.partNumber.toLowerCase()}s</CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={itemChartData}>
+            <ResponsiveContainer width="100%" height={320}>
+              <BarChart data={itemChartData} margin={{ top: 10, right: 10, left: -10, bottom: 70 }}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} height={80} interval={0} tick={(props: any) => { const { x, y, payload } = props; const label = payload.value ?? ""; const d = label.length > 22 ? label.slice(0, 22) + "…" : label; return <g transform={`translate(${x},${y})`}><text x={0} y={0} dy={8} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={10} transform="rotate(-40)">{d}</text></g>; }} />
                 <YAxis tick={{ fontSize: 12 }} />
                 <Tooltip formatter={(value: any) => [value, 'Issues']} />
-                <Bar dataKey="issues" fill="#FFBB28" />
+                <Bar dataKey="issues" fill="#FFBB28" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
