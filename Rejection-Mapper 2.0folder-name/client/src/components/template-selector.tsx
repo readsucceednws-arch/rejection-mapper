@@ -17,7 +17,6 @@ import {
 } from "@/components/ui/dialog";
 import {
   Factory,
-  Cake,
   Utensils,
   Settings,
   CheckCircle,
@@ -93,8 +92,6 @@ export default function TemplateSelector({ organizationId, onTemplateApplied }: 
     switch (industry) {
       case "manufacturing":
         return <Factory className="h-6 w-6" />;
-      case "bakery":
-        return <Cake className="h-6 w-6" />;
       case "food_service":
         return <Utensils className="h-6 w-6" />;
       default:
@@ -106,8 +103,6 @@ export default function TemplateSelector({ organizationId, onTemplateApplied }: 
     switch (industry) {
       case "manufacturing":
         return "bg-blue-100 text-blue-800";
-      case "bakery":
-        return "bg-orange-100 text-orange-800";
       case "food_service":
         return "bg-green-100 text-green-800";
       default:
