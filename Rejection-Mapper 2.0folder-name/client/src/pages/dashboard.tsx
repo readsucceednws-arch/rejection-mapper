@@ -247,10 +247,12 @@ export default function Dashboard() {
   // Part Wise Filters
   const [partWiseTopN, setPartWiseTopN] = useState<number>(10);
   const [partWiseSortOrder, setPartWiseSortOrder] = useState<"asc" | "desc">("desc");
-  
+  const [partWisePctFilter, setPartWisePctFilter] = useState<string>("");
+
   // Rejection Wise Filters
   const [rejectionWiseTopN, setRejectionWiseTopN] = useState<number>(10);
   const [rejectionWiseSortOrder, setRejectionWiseSortOrder] = useState<"asc" | "desc">("desc");
+  const [selectedRejectionCode, setSelectedRejectionCode] = useState<string | null>(null);
 
   // Cost Wise Filters
   const [costWiseTopN, setCostWiseTopN] = useState<number>(10);
@@ -258,6 +260,9 @@ export default function Dashboard() {
 
   // Part Summary drill-down
   const [selectedSummaryPart, setSelectedSummaryPart] = useState<string | null>(null);
+
+  // Zone drill-down
+  const [selectedZone, setSelectedZone] = useState<string | null>(null);
 
   const overviewFilters = useMemo(() => ({ ...globalDates }), [globalDates]);
   const partFilters = useMemo(() => ({ ...globalDates, ...partTabFilters }), [globalDates, partTabFilters]);
@@ -504,33 +509,72 @@ export default function Dashboard() {
     return map;
   }, [analyticsRejectionEntries, analyticsReworkEntries]);
 
+  // Rejection code → affected parts map
+  const rejectionCodePartsData = useMemo(() => {
+    const map = new Map<string, Map<string, number>>();
+    for (const entry of analyticsRejectionEntries ?? []) {
+      const code = entry.rejectionType?.rejectionCode ?? "—";
+      const pn = entry.part.partNumber;
+      if (!map.has(code)) map.set(code, new Map());
+      const existing = map.get(code)!.get(pn) ?? 0;
+      map.get(code)!.set(pn, existing + entry.quantity);
+    }
+    return map;
+  }, [analyticsRejectionEntries]);
+
+  // Zone → top rejection codes + top parts
+  const zoneDrilldownData = useMemo(() => {
+    const map = new Map<string, { codes: Map<string, number>; parts: Map<string, number> }>();
+    for (const entry of zoneRejectionEntries ?? []) {
+      const zone = entry.zone?.name ?? (entry as any).zone ?? "Unknown";
+      if (!map.has(zone)) map.set(zone, { codes: new Map(), parts: new Map() });
+      const code = entry.rejectionType?.reason ?? entry.rejectionType?.rejectionCode ?? "Unknown";
+      const pn = entry.part.partNumber;
+      const d = map.get(zone)!;
+      d.codes.set(code, (d.codes.get(code) ?? 0) + entry.quantity);
+      d.parts.set(pn, (d.parts.get(pn) ?? 0) + entry.quantity);
+    }
+    for (const entry of zoneReworkEntries ?? []) {
+      const zone = entry.zone?.name ?? (entry as any).zone ?? "Unknown";
+      if (!map.has(zone)) map.set(zone, { codes: new Map(), parts: new Map() });
+      const pn = entry.part.partNumber;
+      const d = map.get(zone)!;
+      d.parts.set(pn, (d.parts.get(pn) ?? 0) + entry.quantity);
+    }
+    return map;
+  }, [zoneRejectionEntries, zoneReworkEntries]);
+
   const filteredPartData = useMemo(() => {
-    
     let data = effectivePartData;
-    
-    // Apply part number filter
     if (selectedPartNumbers.length > 0) {
       data = data.filter((p) => selectedPartNumbers.includes(p.partNumber));
     }
-    
-    // Sort the data
     const sorted = [...data].sort((a, b) => {
       const totalA = a.rejections + a.reworks;
       const totalB = b.rejections + b.reworks;
-      if (partWiseSortOrder === "desc") {
-        return totalB - totalA;
-      } else {
-        return totalA - totalB;
-      }
+      return partWiseSortOrder === "desc" ? totalB - totalA : totalA - totalB;
     });
-    
-    // Apply top N filter
+
+    // Apply percentage filter — keep only parts that together account for X% of total
+    const pctVal = parseFloat(partWisePctFilter);
+    if (!isNaN(pctVal) && pctVal > 0 && pctVal <= 100) {
+      const grandTotal = sorted.reduce((s, r) => s + r.rejections + r.reworks, 0);
+      const target = grandTotal * (pctVal / 100);
+      let cumulative = 0;
+      const pctFiltered = [];
+      for (const row of sorted) {
+        pctFiltered.push(row);
+        cumulative += row.rejections + row.reworks;
+        if (cumulative >= target) break;
+      }
+      return pctFiltered;
+    }
+
     if (partWiseTopN > 0 && partWiseTopN !== -1) {
       return sorted.slice(0, partWiseTopN);
     }
-    
     return sorted;
-  }, [effectivePartData, selectedPartNumbers, partWiseTopN, partWiseSortOrder]);
+  }, [effectivePartData, selectedPartNumbers, partWiseTopN, partWiseSortOrder, partWisePctFilter]);
 
   const normalizedCostData = useMemo(() => {
     if (!effectiveCostData) return [];
@@ -807,7 +851,7 @@ export default function Dashboard() {
             </div>
             <div className="grid gap-1">
               <Label className="text-xs text-muted-foreground">Show Top</Label>
-              <Select value={partWiseTopN.toString()} onValueChange={(v) => setPartWiseTopN(parseInt(v))}>
+              <Select value={partWiseTopN.toString()} onValueChange={(v) => { setPartWiseTopN(parseInt(v)); setPartWisePctFilter(""); }}>
                 <SelectTrigger className="h-8 text-xs w-[120px]">
                   <SelectValue />
                 </SelectTrigger>
@@ -831,6 +875,26 @@ export default function Dashboard() {
                   <SelectItem value="asc">Lowest First (↑)</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+            <div className="grid gap-1">
+              <Label className="text-xs text-muted-foreground">Top % of Total</Label>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  placeholder="e.g. 80"
+                  value={partWisePctFilter}
+                  onChange={(e) => { setPartWisePctFilter(e.target.value); }}
+                  className="h-8 w-[80px] pl-2 pr-1 text-xs rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
+                <span className="text-xs text-muted-foreground">%</span>
+                {partWisePctFilter && (
+                  <Button size="sm" variant="ghost" onClick={() => setPartWisePctFilter("")} className="h-8 w-6 p-0 text-muted-foreground">
+                    <X className="w-3 h-3" />
+                  </Button>
+                )}
+              </div>
             </div>
           </Card>
 
@@ -1118,8 +1182,7 @@ export default function Dashboard() {
               <CardHeader>
                 <CardTitle>Rejection Reason Breakdown</CardTitle>
                 <CardDescription>
-                  {filteredRejectionWiseData.length} of {rejectionWiseData.length} reasons
-                  {rejectionSearch ? " (filtered)" : ""}
+                  {filteredRejectionWiseData.length} of {rejectionWiseData.length} reasons — click a code to see affected parts
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -1135,25 +1198,66 @@ export default function Dashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredRejectionWiseData.map((row, i) => (
-                        <tr key={i} className="border-b border-border/30 hover:bg-muted/30 transition-colors">
-                          <td className="py-2 pr-4 font-mono font-medium text-primary">{row.code}</td>
-                          <td className="py-2 pr-4">{row.reason}</td>
-                          <td className="py-2 pr-4 text-right text-muted-foreground">{row.count}</td>
-                          <td className="py-2 pr-4 text-right font-bold">{row.totalQuantity.toLocaleString()}</td>
-                          <td className="py-2 text-right">
-                            <div className="flex items-center justify-end gap-2">
-                              <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
-                                <div
-                                  className="h-full rounded-full bg-primary"
-                                  style={{ width: `${row.pct}%` }}
-                                />
-                              </div>
-                              <span className="text-xs text-muted-foreground tabular-nums w-8 text-right">{row.pct}%</span>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                      {filteredRejectionWiseData.map((row, i) => {
+                        const isSelected = selectedRejectionCode === row.code;
+                        const affectedParts = rejectionCodePartsData.get(row.code);
+                        const partsList = affectedParts
+                          ? Array.from(affectedParts.entries()).sort((a, b) => b[1] - a[1])
+                          : [];
+                        return (
+                          <React.Fragment key={row.code}>
+                            <tr
+                              className={`border-b border-border/30 transition-colors cursor-pointer ${isSelected ? "bg-muted/50" : "hover:bg-muted/30"}`}
+                              onClick={() => setSelectedRejectionCode(isSelected ? null : row.code)}
+                            >
+                              <td className="py-2 pr-4">
+                                <span className="font-mono font-medium text-primary underline underline-offset-2 decoration-dotted">{row.code}</span>
+                                <span className="ml-1 text-muted-foreground text-xs">{isSelected ? "▲" : "▼"}</span>
+                              </td>
+                              <td className="py-2 pr-4">{row.reason}</td>
+                              <td className="py-2 pr-4 text-right text-muted-foreground">{row.count}</td>
+                              <td className="py-2 pr-4 text-right font-bold">{row.totalQuantity.toLocaleString()}</td>
+                              <td className="py-2 text-right">
+                                <div className="flex items-center justify-end gap-2">
+                                  <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
+                                    <div className="h-full rounded-full bg-primary" style={{ width: `${row.pct}%` }} />
+                                  </div>
+                                  <span className="text-xs text-muted-foreground tabular-nums w-8 text-right">{row.pct}%</span>
+                                </div>
+                              </td>
+                            </tr>
+                            {isSelected && (
+                              <tr className="border-b border-border/30 bg-muted/20">
+                                <td colSpan={5} className="py-3 px-4">
+                                  <div className="text-xs font-semibold text-destructive mb-2 flex items-center gap-1">
+                                    <span className="inline-block w-2 h-2 rounded-full bg-destructive"></span>
+                                    Parts affected by {row.code}
+                                  </div>
+                                  {partsList.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground italic">No part data available</p>
+                                  ) : (
+                                    <div className="space-y-1.5 max-w-lg">
+                                      {partsList.map(([pn, qty]) => {
+                                        const totalForCode = partsList.reduce((s, [, q]) => s + q, 0);
+                                        const pct = totalForCode > 0 ? Math.round((qty / totalForCode) * 100) : 0;
+                                        return (
+                                          <div key={pn} className="flex items-center gap-2">
+                                            <div className="flex-1 text-xs truncate text-foreground font-mono">{pn}</div>
+                                            <div className="w-24 h-1.5 bg-border rounded-full overflow-hidden">
+                                              <div className="h-full bg-destructive rounded-full" style={{ width: `${pct}%` }} />
+                                            </div>
+                                            <div className="text-xs font-medium w-12 text-right text-destructive">{qty}</div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
                     </tbody>
                     <tfoot>
                       <tr className="border-t-2 border-border bg-muted/20">
@@ -1186,16 +1290,32 @@ export default function Dashboard() {
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
                 ) : effectiveMonthData && effectiveMonthData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={effectiveMonthData} margin={{ top: 10, right: 20, left: -10, bottom: 10 }}>
+                    <BarChart data={effectiveMonthData} margin={{ top: 24, right: 20, left: -10, bottom: 10 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                       <XAxis dataKey="month" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
-                      <Tooltip contentStyle={{ borderRadius: "8px", border: "1px solid hsl(var(--border))" }} />
-                      <Legend formatter={(value) => <span className="text-xs">{value === "rejections" ? "Rejections" : value === "reworks" ? "Reworks" : "Total"}</span>} />
-                      <Line type="monotone" dataKey="totalQuantity" name="Total" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 4, fill: "#8b5cf6" }} activeDot={{ r: 6 }} />
-                      <Line type="monotone" dataKey="rejections" name="rejections" stroke={REJECTION_COLOR} strokeWidth={2} strokeDasharray="4 2" dot={{ r: 3, fill: REJECTION_COLOR }} activeDot={{ r: 5 }} />
-                      <Line type="monotone" dataKey="reworks" name="reworks" stroke={REWORK_COLOR} strokeWidth={2} strokeDasharray="4 2" dot={{ r: 3, fill: REWORK_COLOR }} activeDot={{ r: 5 }} />
-                    </LineChart>
+                      <Tooltip contentStyle={{ borderRadius: "8px", border: "1px solid hsl(var(--border))" }} formatter={(value, name) => [value, name === "rejections" ? "Rejections" : name === "reworks" ? "Reworks" : "Total"]} />
+                      <Legend formatter={(value) => <span className="text-xs capitalize">{value === "rejections" ? "Rejections" : value === "reworks" ? "Reworks" : "Total"}</span>} />
+                      <Bar dataKey="rejections" name="rejections" stackId="a" fill={REJECTION_COLOR}
+                        label={(props: any) => {
+                          const { x, y, width, index } = props;
+                          const row = effectiveMonthData[index];
+                          if (!row || row.reworks > 0) return null;
+                          const total = row.rejections ?? 0;
+                          if (!total) return null;
+                          return <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={9} fill="hsl(var(--muted-foreground))">{total}</text>;
+                        }}
+                      />
+                      <Bar dataKey="reworks" name="reworks" stackId="a" fill={REWORK_COLOR} radius={[4, 4, 0, 0]}
+                        label={(props: any) => {
+                          const { x, y, width, index } = props;
+                          const row = effectiveMonthData[index];
+                          if (!row || row.reworks === 0) return null;
+                          const total = (row.rejections ?? 0) + (row.reworks ?? 0);
+                          return <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={9} fill="hsl(var(--muted-foreground))">{total}</text>;
+                        }}
+                      />
+                    </BarChart>
                   </ResponsiveContainer>
                 ) : (
                   <div className="h-full flex items-center justify-center text-muted-foreground">No data available for selected filters</div>
@@ -1306,14 +1426,14 @@ export default function Dashboard() {
               <CardDescription>Rejection cost per part for current selection</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="h-[420px] w-full">
+              <div className="h-[480px] w-full">
                 {isLoadingCost ? (
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
                 ) : filteredCostTableData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={filteredCostTableData} margin={{ top: 24, right: 20, left: 10, bottom: 80 }}>
+                    <BarChart data={filteredCostTableData} margin={{ top: 24, right: 20, left: 10, bottom: 110 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                      <XAxis dataKey="partNumber" axisLine={false} tickLine={false} height={90} interval={0} tick={<CustomXAxisTick maxLen={18} />} />
+                      <XAxis dataKey="partNumber" axisLine={false} tickLine={false} height={120} interval={0} tick={<CustomXAxisTick maxLen={28} />} />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${v.toLocaleString("en-IN")}`} />
                       <Tooltip
                         cursor={{ fill: "hsl(var(--muted)/0.4)" }}
@@ -1535,7 +1655,10 @@ export default function Dashboard() {
 
           {effectiveZoneData && effectiveZoneData.length > 0 && (
             <Card className="shadow-sm border-border/50">
-              <CardHeader><CardTitle>Zone Summary Table</CardTitle></CardHeader>
+              <CardHeader>
+                <CardTitle>Zone Summary Table</CardTitle>
+                <CardDescription>Click a zone to see top rejection codes and affected parts</CardDescription>
+              </CardHeader>
               <CardContent>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -1548,14 +1671,81 @@ export default function Dashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {effectiveZoneData.map((row, i) => (
-                        <tr key={i} className="border-b border-border/30 hover:bg-muted/30 transition-colors">
-                          <td className="py-2 pr-4 font-medium">{row.zone}</td>
-                          <td className="py-2 pr-4 text-right text-destructive font-medium">{row.rejections}</td>
-                          <td className="py-2 pr-4 text-right text-blue-500 font-medium">{row.reworks}</td>
-                          <td className="py-2 text-right font-bold">{row.totalQuantity}</td>
-                        </tr>
-                      ))}
+                      {effectiveZoneData.map((row, i) => {
+                        const isSelected = selectedZone === row.zone;
+                        const drill = zoneDrilldownData.get(row.zone);
+                        const topCodes = drill
+                          ? Array.from(drill.codes.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5)
+                          : [];
+                        const topParts = drill
+                          ? Array.from(drill.parts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 3)
+                          : [];
+                        const maxCode = topCodes[0]?.[1] || 1;
+                        return (
+                          <React.Fragment key={row.zone}>
+                            <tr
+                              className={`border-b border-border/30 transition-colors cursor-pointer ${isSelected ? "bg-muted/50" : "hover:bg-muted/30"}`}
+                              onClick={() => setSelectedZone(isSelected ? null : row.zone)}
+                            >
+                              <td className="py-2 pr-4 font-medium">
+                                <span className="text-primary underline underline-offset-2 decoration-dotted">{row.zone}</span>
+                                <span className="ml-2 text-muted-foreground text-xs">{isSelected ? "▲" : "▼"}</span>
+                              </td>
+                              <td className="py-2 pr-4 text-right text-destructive font-medium">{row.rejections}</td>
+                              <td className="py-2 pr-4 text-right text-blue-500 font-medium">{row.reworks}</td>
+                              <td className="py-2 text-right font-bold">{row.totalQuantity}</td>
+                            </tr>
+                            {isSelected && (
+                              <tr className="border-b border-border/30 bg-muted/20">
+                                <td colSpan={4} className="py-3 px-4">
+                                  <div className="flex flex-wrap gap-8">
+                                    <div className="flex-1 min-w-[220px]">
+                                      <div className="text-xs font-semibold text-destructive mb-2 flex items-center gap-1">
+                                        <span className="inline-block w-2 h-2 rounded-full bg-destructive"></span>
+                                        Top Rejection Codes
+                                      </div>
+                                      {topCodes.length === 0 ? (
+                                        <p className="text-xs text-muted-foreground italic">No rejection data</p>
+                                      ) : (
+                                        <div className="space-y-1.5">
+                                          {topCodes.map(([code, qty]) => (
+                                            <div key={code} className="flex items-center gap-2">
+                                              <div className="flex-1 text-xs truncate text-foreground">{code}</div>
+                                              <div className="w-20 h-1.5 bg-border rounded-full overflow-hidden">
+                                                <div className="h-full bg-destructive rounded-full" style={{ width: `${Math.round((qty / maxCode) * 100)}%` }} />
+                                              </div>
+                                              <div className="text-xs font-medium w-10 text-right text-destructive">{qty}</div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="flex-1 min-w-[220px]">
+                                      <div className="text-xs font-semibold text-blue-500 mb-2 flex items-center gap-1">
+                                        <span className="inline-block w-2 h-2 rounded-full bg-blue-500"></span>
+                                        Top 3 Parts
+                                      </div>
+                                      {topParts.length === 0 ? (
+                                        <p className="text-xs text-muted-foreground italic">No part data</p>
+                                      ) : (
+                                        <div className="space-y-1.5">
+                                          {topParts.map(([pn, qty], idx) => (
+                                            <div key={pn} className="flex items-center gap-2">
+                                              <span className="text-xs font-bold text-muted-foreground w-4">#{idx + 1}</span>
+                                              <div className="flex-1 text-xs truncate text-foreground font-mono">{pn}</div>
+                                              <div className="text-xs font-medium w-10 text-right text-blue-500">{qty}</div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
                     </tbody>
                     <tfoot>
                       <tr className="border-t-2 border-border/50 bg-muted/20">
