@@ -522,11 +522,28 @@ export default function Dashboard() {
     return map;
   }, [analyticsRejectionEntries]);
 
-  // Zone → top rejection codes + top parts
+  // Zone → top rejection codes + top parts — mirrors server resolveRejectionZone / resolveReworkZone logic
   const zoneDrilldownData = useMemo(() => {
+    const LEGACY_TYPES = new Set(["rejection", "rework", ""]);
+    const isLegacy = (v: string | null | undefined) => !v || LEGACY_TYPES.has(v);
+
+    const resolveRejZone = (entry: any): string => {
+      if (entry.zone?.name) return entry.zone.name;
+      const t = entry.rejectionType?.type;
+      if (t && !isLegacy(t)) return t;
+      return "General";
+    };
+    const resolveRwZone = (entry: any): string => {
+      if (entry.zone?.name) return entry.zone.name;
+      const z = entry.reworkType?.zone;
+      if (z && !isLegacy(z)) return z;
+      return "General";
+    };
+
     const map = new Map<string, { codes: Map<string, number>; parts: Map<string, number> }>();
+
     for (const entry of zoneRejectionEntries ?? []) {
-      const zone = entry.zone?.name ?? (entry as any).zone ?? "Unknown";
+      const zone = resolveRejZone(entry);
       if (!map.has(zone)) map.set(zone, { codes: new Map(), parts: new Map() });
       const code = entry.rejectionType?.reason ?? entry.rejectionType?.rejectionCode ?? "Unknown";
       const pn = entry.part.partNumber;
@@ -535,7 +552,7 @@ export default function Dashboard() {
       d.parts.set(pn, (d.parts.get(pn) ?? 0) + entry.quantity);
     }
     for (const entry of zoneReworkEntries ?? []) {
-      const zone = entry.zone?.name ?? (entry as any).zone ?? "Unknown";
+      const zone = resolveRwZone(entry);
       if (!map.has(zone)) map.set(zone, { codes: new Map(), parts: new Map() });
       const pn = entry.part.partNumber;
       const d = map.get(zone)!;
