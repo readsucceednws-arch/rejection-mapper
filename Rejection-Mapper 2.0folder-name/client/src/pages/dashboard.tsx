@@ -493,7 +493,11 @@ export default function Dashboard() {
     for (const entry of analyticsRejectionEntries ?? []) {
       const pn = entry.part.partNumber;
       if (!map.has(pn)) map.set(pn, { rejectionCauses: new Map(), reworkCauses: new Map() });
-      const reason = entry.rejectionType?.reason ?? "Unknown";
+      const reason = entry.rejectionType?.reason
+        ?? (entry as any).rejectionReason
+        ?? entry.rejectionType?.rejectionCode
+        ?? (entry as any).rejectionReasonCode
+        ?? "Unknown";
       const existing = map.get(pn)!.rejectionCauses.get(reason) ?? 0;
       map.get(pn)!.rejectionCauses.set(reason, existing + entry.quantity);
     }
@@ -501,7 +505,10 @@ export default function Dashboard() {
     for (const entry of analyticsReworkEntries ?? []) {
       const pn = entry.part.partNumber;
       if (!map.has(pn)) map.set(pn, { rejectionCauses: new Map(), reworkCauses: new Map() });
-      const reason = (entry as any).reworkType?.reason ?? (entry as any).reworkType?.name ?? "Unknown";
+      const reason = (entry as any).reworkType?.reason
+        ?? (entry as any).reworkType?.name
+        ?? (entry as any).reworkType?.reworkCode
+        ?? "Unknown";
       const existing = map.get(pn)!.reworkCauses.get(reason) ?? 0;
       map.get(pn)!.reworkCauses.set(reason, existing + entry.quantity);
     }
@@ -513,7 +520,11 @@ export default function Dashboard() {
   const rejectionCodePartsData = useMemo(() => {
     const map = new Map<string, Map<string, number>>();
     for (const entry of analyticsRejectionEntries ?? []) {
-      const code = entry.rejectionType?.rejectionCode ?? "—";
+      const code = entry.rejectionType?.rejectionCode
+        ?? (entry as any).rejectionReasonCode
+        ?? entry.rejectionType?.reason
+        ?? (entry as any).rejectionReason
+        ?? "—";
       const pn = entry.part.partNumber;
       if (!map.has(code)) map.set(code, new Map());
       const existing = map.get(code)!.get(pn) ?? 0;
@@ -545,7 +556,11 @@ export default function Dashboard() {
     for (const entry of zoneRejectionEntries ?? []) {
       const zone = resolveRejZone(entry);
       if (!map.has(zone)) map.set(zone, { codes: new Map(), parts: new Map() });
-      const code = entry.rejectionType?.reason ?? entry.rejectionType?.rejectionCode ?? "Unknown";
+      const code = entry.rejectionType?.reason
+        ?? entry.rejectionType?.rejectionCode
+        ?? (entry as any).rejectionReason
+        ?? (entry as any).rejectionReasonCode
+        ?? "Unknown";
       const pn = entry.part.partNumber;
       const d = map.get(zone)!;
       d.codes.set(code, (d.codes.get(code) ?? 0) + entry.quantity);
