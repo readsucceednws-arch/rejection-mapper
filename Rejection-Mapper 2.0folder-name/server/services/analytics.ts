@@ -95,14 +95,20 @@ export interface AnalyticsData {
 export class AnalyticsService {
   
   /**
-   * Sync issueEntries from rejectionEntries and reworkEntries.
-   * Always re-syncs so newly added entries are always reflected.
+   * Ensure issueEntries is populated with data from existing tables
    */
   private async ensureIssueEntriesPopulated(organizationId: number): Promise<void> {
-    // Always delete and re-sync — this ensures entries added after the
-    // first population (the old early-return bug) are always included.
-    await db.delete(issueEntries).where(eq(issueEntries.organizationId, organizationId));
+    // Check if issueEntries has data for this org
+    const existingEntries = await db.select({ count: count() })
+      .from(issueEntries)
+      .where(eq(issueEntries.organizationId, organizationId))
+      .limit(1);
 
+    if (existingEntries[0]?.count > 0) {
+      return; // Already populated
+    }
+
+    // Get data from existing tables
     const [rejectionData, reworkData] = await Promise.all([
       db.select({
         partNumber: parts.partNumber,
@@ -138,6 +144,7 @@ export class AnalyticsService {
       .where(eq(reworkEntries.organizationId, organizationId))
     ]);
 
+    // Combine and insert into issueEntries
     const allEntries = [
       ...rejectionData.map(entry => ({
         ...entry,
@@ -158,7 +165,7 @@ export class AnalyticsService {
    * Get comprehensive analytics for organization
    */
   async getAnalytics(organizationId: number, period?: AnalyticsPeriod): Promise<AnalyticsData> {
-    // Always re-sync issueEntries so new data is reflected
+    // Ensure issueEntries is populated with existing data
     await this.ensureIssueEntriesPopulated(organizationId);
     
     const defaultPeriod = this.getDefaultPeriod();
@@ -324,6 +331,7 @@ export class AnalyticsService {
     const result: TopCategory[] = [];
 
     for (const category of categories) {
+      // Get top issue type for this category
       const topIssueType = await db.select({ type: issueEntries.type })
         .from(issueEntries)
         .where(and(
@@ -381,6 +389,7 @@ export class AnalyticsService {
     const result: TopItem[] = [];
 
     for (const item of items) {
+      // Get top issue type for this item
       const topIssueType = await db.select({ type: issueEntries.type })
         .from(issueEntries)
         .where(and(
@@ -438,6 +447,7 @@ export class AnalyticsService {
     const result: TopIssueType[] = [];
 
     for (const issueType of issueTypes) {
+      // Get top category and item for this issue type
       const [topCategory, topItem] = await Promise.all([
         db.select({ zone: issueEntries.zone })
           .from(issueEntries)
@@ -480,25 +490,55 @@ export class AnalyticsService {
    * Get daily trend data
    */
   private async getDailyTrend(organizationId: number, period: AnalyticsPeriod): Promise<DailyTrend[]> {
-    const entries = await db.select({
-      date: sql<string>`DATE(${issueEntries.date})`,
-      count: count(),
-      quantity: sum(issueEntries.quantity).mapWith(Number)
-    })
-    .from(issueEntries)
-    .where(and(
-      eq(issueEntries.organizationId, organizationId),
-      gte(issueEntries.date, period.from),
-      lte(issueEntries.date, period.to)
-    ))
-    .groupBy(sql`DATE(${issueEntries.date})`)
-    .orderBy(sql`DATE(${issueEntries.date})`);
+    // Query directly from rejectionEntries and reworkEntries to avoid stale issueEntries cache
+    const [rejRows, rwRows] = await Promise.all([
+      db.select({
+        date: sql<string>`DATE(${rejectionEntries.date})`,
+        count: count(),
+        quantity: sum(rejectionEntries.quantity).mapWith(Number)
+      })
+      .from(rejectionEntries)
+      .where(and(
+        eq(rejectionEntries.organizationId, organizationId),
+        gte(rejectionEntries.date, period.from),
+        lte(rejectionEntries.date, period.to)
+      ))
+      .groupBy(sql`DATE(${rejectionEntries.date})`),
 
-    return entries.map(entry => ({
-      date: entry.date,
-      count: entry.count,
-      quantity: entry.quantity
-    }));
+      db.select({
+        date: sql<string>`DATE(${reworkEntries.date})`,
+        count: count(),
+        quantity: sum(reworkEntries.quantity).mapWith(Number)
+      })
+      .from(reworkEntries)
+      .where(and(
+        eq(reworkEntries.organizationId, organizationId),
+        gte(reworkEntries.date, period.from),
+        lte(reworkEntries.date, period.to)
+      ))
+      .groupBy(sql`DATE(${reworkEntries.date})`)
+    ]);
+
+    // Merge by date
+    const map = new Map<string, { count: number; quantity: number }>();
+    for (const r of rejRows) {
+      const d = r.date;
+      const e = map.get(d) ?? { count: 0, quantity: 0 };
+      e.count += r.count;
+      e.quantity += r.quantity ?? 0;
+      map.set(d, e);
+    }
+    for (const r of rwRows) {
+      const d = r.date;
+      const e = map.get(d) ?? { count: 0, quantity: 0 };
+      e.count += r.count;
+      e.quantity += r.quantity ?? 0;
+      map.set(d, e);
+    }
+
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, { count, quantity }]) => ({ date, count, quantity }));
   }
 
   /**
@@ -507,6 +547,7 @@ export class AnalyticsService {
   private async generateInsights(organizationId: number, period: AnalyticsPeriod): Promise<InsightSummary[]> {
     const insights: InsightSummary[] = [];
 
+    // Top rejection reason
     const topRejectionReason = await db.select({
       reason: rejectionTypes.reason,
       code: rejectionTypes.rejectionCode,
@@ -533,6 +574,7 @@ export class AnalyticsService {
       });
     }
 
+    // Top rework type
     const topReworkType = await db.select({
       reason: reworkTypes.reason,
       code: reworkTypes.reworkCode,
@@ -559,6 +601,7 @@ export class AnalyticsService {
       });
     }
 
+    // Get biggest problem zone
     const topZone = await db.select({
       zone: issueEntries.zone,
       count: count()
@@ -584,6 +627,7 @@ export class AnalyticsService {
       });
     }
 
+    // Get trend change
     const trend7Days = await this.getTrendData(organizationId, 7);
     if (trend7Days.trend !== 'stable') {
       insights.push({
@@ -600,7 +644,7 @@ export class AnalyticsService {
   }
 
   /**
-   * Get field labels (manufacturing defaults)
+   * Get field labels (manufacturing defaults, no template system)
    */
   async getFieldLabels(organizationId: number): Promise<Record<string, string>> {
     return {
