@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { 
   useAnalyticsOverview, 
   useFieldLabels,
   useAnalyticsInsights,
   AnalyticsFilters 
 } from "@/hooks/use-analytics";
+import { useRejectionEntries } from "@/hooks/use-rejection-entries";
+import { useReworkEntries } from "@/hooks/use-rework-entries";
 import { exportWeeklyReportCSV, exportMonthlyReportCSV } from "@/hooks/use-reports";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -78,6 +80,43 @@ export default function AnalyticsDashboard() {
   const { data: analytics, isLoading, error } = useAnalyticsOverview(filters);
   const { data: fieldLabels } = useFieldLabels();
   const { data: insights } = useAnalyticsInsights(filters);
+  const { data: rejectionEntries } = useRejectionEntries();
+  const { data: reworkEntries } = useReworkEntries();
+
+  // Compute actual top rejection reasons from raw entries
+  const topRejectionReasons = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const e of rejectionEntries ?? []) {
+      const reason = e.rejectionType?.reason
+        ?? (e as any).rejectionReason
+        ?? e.rejectionType?.rejectionCode
+        ?? (e as any).rejectionReasonCode
+        ?? "Unknown";
+      map.set(reason, (map.get(reason) ?? 0) + e.quantity);
+    }
+    const total = Array.from(map.values()).reduce((s, v) => s + v, 0) || 1;
+    return Array.from(map.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([name, qty]) => ({ name, count: qty, percentage: (qty / total) * 100 }));
+  }, [rejectionEntries]);
+
+  // Compute actual top rework types from raw entries
+  const topReworkTypes = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const e of reworkEntries ?? []) {
+      const reason = (e as any).reworkType?.reason
+        ?? (e as any).reworkType?.name
+        ?? (e as any).reworkType?.reworkCode
+        ?? "Unknown";
+      map.set(reason, (map.get(reason) ?? 0) + e.quantity);
+    }
+    const total = Array.from(map.values()).reduce((s, v) => s + v, 0) || 1;
+    return Array.from(map.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([name, qty]) => ({ name, count: qty, percentage: (qty / total) * 100 }));
+  }, [reworkEntries]);
 
   if (isLoading) {
     return (
@@ -304,30 +343,30 @@ export default function AnalyticsDashboard() {
         </Card>
       </div>
 
-      {/* Top Issue Types (horizontal bar list) + Top Parts (horizontal bar list) */}
+      {/* Top Rejection Reasons + Top Rework Types */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="shadow-sm border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-base">
-              <AlertTriangle className="h-4 w-4 text-emerald-500" />Top {labels.type}s
+              <AlertTriangle className="h-4 w-4 text-destructive" />Top Rejection Reasons
             </CardTitle>
-            <CardDescription>Most frequent issue types</CardDescription>
+            <CardDescription>Most frequent rejection causes by quantity</CardDescription>
           </CardHeader>
           <CardContent>
-            {issueTypeChartData.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">No data</p>
+            {topRejectionReasons.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">No rejection data</p>
             ) : (
               <div className="space-y-3 mt-1">
-                {issueTypeChartData.map((row, i) => {
-                  const pct = Math.round((row.count / (issueTypeChartData[0]?.count || 1)) * 100);
+                {topRejectionReasons.map((row, i) => {
+                  const pct = Math.round((row.count / (topRejectionReasons[0]?.count || 1)) * 100);
                   return (
                     <div key={i}>
                       <div className="flex items-center justify-between text-xs mb-1">
                         <span className="truncate text-foreground font-medium max-w-[65%]" title={row.name}>{row.name}</span>
-                        <span className="font-bold tabular-nums" style={{ color: row.fill }}>{row.count.toLocaleString()} <span className="text-muted-foreground font-normal">({row.percentage.toFixed(1)}%)</span></span>
+                        <span className="font-bold tabular-nums text-destructive">{row.count.toLocaleString()} <span className="text-muted-foreground font-normal">({row.percentage.toFixed(1)}%)</span></span>
                       </div>
                       <div className="h-2 bg-muted rounded-full overflow-hidden">
-                        <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: row.fill }} />
+                        <div className="h-full rounded-full bg-destructive" style={{ width: `${pct}%` }} />
                       </div>
                     </div>
                   );
@@ -340,25 +379,25 @@ export default function AnalyticsDashboard() {
         <Card className="shadow-sm border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-base">
-              <Package className="h-4 w-4 text-amber-500" />Top {labels.partNumber}s
+              <Target className="h-4 w-4 text-blue-500" />Top Rework Types
             </CardTitle>
-            <CardDescription>Most affected {labels.partNumber.toLowerCase()}s</CardDescription>
+            <CardDescription>Most frequent rework causes by quantity</CardDescription>
           </CardHeader>
           <CardContent>
-            {itemChartData.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">No data</p>
+            {topReworkTypes.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">No rework data</p>
             ) : (
               <div className="space-y-3 mt-1">
-                {itemChartData.map((row, i) => {
-                  const pct = Math.round((row.issues / (itemChartData[0]?.issues || 1)) * 100);
+                {topReworkTypes.map((row, i) => {
+                  const pct = Math.round((row.count / (topReworkTypes[0]?.count || 1)) * 100);
                   return (
                     <div key={i}>
                       <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="truncate font-mono text-foreground font-medium max-w-[65%]" title={row.name}>{row.name}</span>
-                        <span className="font-bold tabular-nums" style={{ color: row.fill }}>{row.issues.toLocaleString()} <span className="text-muted-foreground font-normal">({row.percentage.toFixed(1)}%)</span></span>
+                        <span className="truncate text-foreground font-medium max-w-[65%]" title={row.name}>{row.name}</span>
+                        <span className="font-bold tabular-nums text-blue-500">{row.count.toLocaleString()} <span className="text-muted-foreground font-normal">({row.percentage.toFixed(1)}%)</span></span>
                       </div>
                       <div className="h-2 bg-muted rounded-full overflow-hidden">
-                        <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: row.fill }} />
+                        <div className="h-full rounded-full bg-blue-500" style={{ width: `${pct}%` }} />
                       </div>
                     </div>
                   );
@@ -369,7 +408,37 @@ export default function AnalyticsDashboard() {
         </Card>
       </div>
 
-      {/* Key Insights */}
+      {/* Top Part Numbers */}
+      <Card className="shadow-sm border-border/50">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Package className="h-4 w-4 text-amber-500" />Top {labels.partNumber}s
+          </CardTitle>
+          <CardDescription>Most affected {labels.partNumber.toLowerCase()}s by issue count</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {itemChartData.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">No data</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 mt-1">
+              {itemChartData.map((row, i) => {
+                const pct = Math.round((row.issues / (itemChartData[0]?.issues || 1)) * 100);
+                return (
+                  <div key={i}>
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span className="truncate font-mono text-foreground font-medium max-w-[65%]" title={row.name}>{row.name}</span>
+                      <span className="font-bold tabular-nums" style={{ color: row.fill }}>{row.issues.toLocaleString()} <span className="text-muted-foreground font-normal">({row.percentage.toFixed(1)}%)</span></span>
+                    </div>
+                    <div className="h-2 bg-muted rounded-full overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: row.fill }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
       <Card className="shadow-sm border-border/50">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
