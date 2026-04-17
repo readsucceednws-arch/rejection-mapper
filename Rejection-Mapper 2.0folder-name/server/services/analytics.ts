@@ -1,6 +1,6 @@
 import { db } from "../storage";
 import { issueEntries, organizations, rejectionEntries, reworkEntries, parts, rejectionTypes, reworkTypes, zones } from "@shared/schema";
-import { eq, and, gte, lte, desc, count, sum, sql, isNotNull } from "drizzle-orm";
+import { eq, and, gte, lte, desc, count, sum, sql, inArray } from "drizzle-orm";
 
 /**
  * Advanced Analytics Service
@@ -93,118 +93,71 @@ export interface AnalyticsData {
 }
 
 export class AnalyticsService {
-
+  
   /**
-   * Ensure issueEntries is populated with data from existing tables.
-   *
-   * FIX: Previously the insert spread aliased select fields directly, so
-   * `zone` (from zones.name) and `partNumber` (from parts.partNumber) were
-   * spread under those same keys — which looks correct, BUT the select aliases
-   * matched issueEntries column names only by coincidence for `zone`, while
-   * other mismatches (e.g. rework using sql`'rework'` for `type`) meant the
-   * `type` column could be NULL for rework entries.  More importantly, because
-   * `zone` and `partNumber` are NOT NULL in the schema, any row where the join
-   * produced a NULL (unassigned zone / no part) would violate the constraint
-   * and silently roll back or error, leaving issueEntries empty and every
-   * subsequent query returning "Unknown".
-   *
-   * The fix explicitly maps every field and coalesces NULLs to safe defaults.
+   * Ensure issueEntries is populated with data from existing tables
    */
   private async ensureIssueEntriesPopulated(organizationId: number): Promise<void> {
+    // Check if issueEntries has data for this org
     const existingEntries = await db.select({ count: count() })
       .from(issueEntries)
       .where(eq(issueEntries.organizationId, organizationId))
       .limit(1);
 
-    if ((existingEntries[0]?.count ?? 0) > 0) {
+    if (existingEntries[0]?.count > 0) {
       return; // Already populated
     }
 
+    // Get data from existing tables
     const [rejectionData, reworkData] = await Promise.all([
       db.select({
         partNumber: parts.partNumber,
-        zoneName: zones.name,
-        rejTypeName: rejectionTypes.type,
-        rejZone: rejectionTypes.zone,
+        zone: zones.name,
+        type: rejectionTypes.type,
         quantity: rejectionEntries.quantity,
         date: rejectionEntries.date,
         remarks: rejectionEntries.remarks,
         organizationId: rejectionEntries.organizationId,
         createdByUsername: rejectionEntries.createdByUsername,
-        importedAt: rejectionEntries.importedAt,
+        importedAt: rejectionEntries.importedAt
       })
-        .from(rejectionEntries)
-        .leftJoin(parts, eq(rejectionEntries.partId, parts.id))
-        .leftJoin(zones, eq(rejectionEntries.zoneId, zones.id))
-        .leftJoin(rejectionTypes, eq(rejectionEntries.rejectionTypeId, rejectionTypes.id))
-        .where(eq(rejectionEntries.organizationId, organizationId)),
-
+      .from(rejectionEntries)
+      .leftJoin(parts, eq(rejectionEntries.partId, parts.id))
+      .leftJoin(zones, eq(rejectionEntries.zoneId, zones.id))
+      .leftJoin(rejectionTypes, eq(rejectionEntries.rejectionTypeId, rejectionTypes.id))
+      .where(eq(rejectionEntries.organizationId, organizationId)),
+      
       db.select({
         partNumber: parts.partNumber,
-        zoneName: zones.name,
-        rwZone: reworkTypes.zone,
+        zone: zones.name,
+        type: sql<string>`'rework'`,
         quantity: reworkEntries.quantity,
         date: reworkEntries.date,
         remarks: reworkEntries.remarks,
         organizationId: reworkEntries.organizationId,
         createdByUsername: reworkEntries.createdByUsername,
-        importedAt: reworkEntries.importedAt,
+        importedAt: reworkEntries.importedAt
       })
-        .from(reworkEntries)
-        .leftJoin(parts, eq(reworkEntries.partId, parts.id))
-        .leftJoin(zones, eq(reworkEntries.zoneId, zones.id))
-        .leftJoin(reworkTypes, eq(reworkEntries.reworkTypeId, reworkTypes.id))
-        .where(eq(reworkEntries.organizationId, organizationId)),
+      .from(reworkEntries)
+      .leftJoin(parts, eq(reworkEntries.partId, parts.id))
+      .leftJoin(zones, eq(reworkEntries.zoneId, zones.id))
+      .where(eq(reworkEntries.organizationId, organizationId))
     ]);
 
-    const LEGACY = new Set(['rejection', 'rework', '']);
-
+    // Combine and insert into issueEntries
     const allEntries = [
       ...rejectionData.map(entry => ({
-        organizationId: entry.organizationId,
-        // Resolve zone: prefer zones.name, then rejectionTypes.zone, then 'General'
-        zone:
-          entry.zoneName ??
-          (entry.rejZone && !LEGACY.has(entry.rejZone) ? entry.rejZone : null) ??
-          'General',
-        // Resolve partNumber: fall back to 'Unknown' to satisfy NOT NULL
-        partNumber: entry.partNumber ?? 'Unknown',
-        // Resolve type: prefer rejectionTypes.type, fall back to 'rejection'
-        type:
-          entry.rejTypeName && !LEGACY.has(entry.rejTypeName)
-            ? entry.rejTypeName
-            : 'rejection',
-        quantity: entry.quantity ?? 1,
-        date: entry.date,
-        remarks: entry.remarks,
-        createdByUsername: entry.createdByUsername,
-        importedAt: entry.importedAt,
-        entryType: 'rejection' as const,
+        ...entry,
+        entryType: 'rejection'
       })),
       ...reworkData.map(entry => ({
-        organizationId: entry.organizationId,
-        // Resolve zone: prefer zones.name, then reworkTypes.zone, then 'General'
-        zone:
-          entry.zoneName ??
-          (entry.rwZone && !LEGACY.has(entry.rwZone) ? entry.rwZone : null) ??
-          'General',
-        partNumber: entry.partNumber ?? 'Unknown',
-        type: 'rework',
-        quantity: entry.quantity ?? 1,
-        date: entry.date,
-        remarks: entry.remarks,
-        createdByUsername: entry.createdByUsername,
-        importedAt: entry.importedAt,
-        entryType: 'rework' as const,
-      })),
+        ...entry,
+        entryType: 'rework'
+      }))
     ];
 
     if (allEntries.length > 0) {
-      // Insert in chunks to avoid hitting parameter limits on large datasets
-      const CHUNK = 500;
-      for (let i = 0; i < allEntries.length; i += CHUNK) {
-        await db.insert(issueEntries).values(allEntries.slice(i, i + CHUNK));
-      }
+      await db.insert(issueEntries).values(allEntries);
     }
   }
 
@@ -212,8 +165,9 @@ export class AnalyticsService {
    * Get comprehensive analytics for organization
    */
   async getAnalytics(organizationId: number, period?: AnalyticsPeriod): Promise<AnalyticsData> {
+    // Ensure issueEntries is populated with existing data
     await this.ensureIssueEntriesPopulated(organizationId);
-
+    
     const defaultPeriod = this.getDefaultPeriod();
     const analyticsPeriod = period || defaultPeriod;
 
@@ -225,7 +179,7 @@ export class AnalyticsService {
       topItems,
       topIssueTypes,
       dailyTrend,
-      insights,
+      insights
     ] = await Promise.all([
       this.getOverviewStats(organizationId, analyticsPeriod),
       this.getTrendData(organizationId, 7),
@@ -234,28 +188,25 @@ export class AnalyticsService {
       this.getTopItems(organizationId, analyticsPeriod),
       this.getTopIssueTypes(organizationId, analyticsPeriod),
       this.getDailyTrend(organizationId, analyticsPeriod),
-      this.generateInsights(organizationId, analyticsPeriod),
+      this.generateInsights(organizationId, analyticsPeriod)
     ]);
 
     return {
       overview,
       trends: {
         last7Days: last7DaysTrend,
-        last30Days: last30DaysTrend,
+        last30Days: last30DaysTrend
       },
       topCategories,
       topItems,
       topIssueTypes,
       dailyTrend,
-      insights,
+      insights
     };
   }
 
   /**
    * Get overview statistics
-   *
-   * FIX: Now counts unique categories and items properly by querying
-   * source tables directly (same pattern as getDailyTrend).
    */
   private async getOverviewStats(organizationId: number, period: AnalyticsPeriod): Promise<OverviewStats> {
     const [rejStats, rwStats] = await Promise.all([
@@ -263,77 +214,17 @@ export class AnalyticsService {
         count: count(),
         totalQuantity: sum(rejectionEntries.quantity).mapWith(Number),
       })
-        .from(rejectionEntries)
-        .where(and(
-          eq(rejectionEntries.organizationId, organizationId),
-          gte(rejectionEntries.date, period.from),
-          lte(rejectionEntries.date, period.to),
-        ))
-        .limit(1),
+      .from(rejectionEntries)
+      .where(and(eq(rejectionEntries.organizationId, organizationId), gte(rejectionEntries.date, period.from), lte(rejectionEntries.date, period.to)))
+      .limit(1),
 
       db.select({
         count: count(),
         totalQuantity: sum(reworkEntries.quantity).mapWith(Number),
       })
-        .from(reworkEntries)
-        .where(and(
-          eq(reworkEntries.organizationId, organizationId),
-          gte(reworkEntries.date, period.from),
-          lte(reworkEntries.date, period.to),
-        ))
-        .limit(1),
-    ]);
-
-    // Count unique zones across both source tables
-    const [uniqueZonesRej, uniqueZonesRw] = await Promise.all([
-      db.selectDistinct({ zone: zones.name })
-        .from(rejectionEntries)
-        .leftJoin(zones, eq(rejectionEntries.zoneId, zones.id))
-        .where(and(
-          eq(rejectionEntries.organizationId, organizationId),
-          gte(rejectionEntries.date, period.from),
-          lte(rejectionEntries.date, period.to),
-          isNotNull(zones.name),
-        )),
-      db.selectDistinct({ zone: zones.name })
-        .from(reworkEntries)
-        .leftJoin(zones, eq(reworkEntries.zoneId, zones.id))
-        .where(and(
-          eq(reworkEntries.organizationId, organizationId),
-          gte(reworkEntries.date, period.from),
-          lte(reworkEntries.date, period.to),
-          isNotNull(zones.name),
-        )),
-    ]);
-
-    const uniqueZoneSet = new Set([
-      ...uniqueZonesRej.map(r => r.zone),
-      ...uniqueZonesRw.map(r => r.zone),
-    ]);
-
-    // Count unique parts across both source tables
-    const [uniquePartsRej, uniquePartsRw] = await Promise.all([
-      db.selectDistinct({ partId: rejectionEntries.partId })
-        .from(rejectionEntries)
-        .where(and(
-          eq(rejectionEntries.organizationId, organizationId),
-          gte(rejectionEntries.date, period.from),
-          lte(rejectionEntries.date, period.to),
-          isNotNull(rejectionEntries.partId),
-        )),
-      db.selectDistinct({ partId: reworkEntries.partId })
-        .from(reworkEntries)
-        .where(and(
-          eq(reworkEntries.organizationId, organizationId),
-          gte(reworkEntries.date, period.from),
-          lte(reworkEntries.date, period.to),
-          isNotNull(reworkEntries.partId),
-        )),
-    ]);
-
-    const uniquePartSet = new Set([
-      ...uniquePartsRej.map(r => r.partId),
-      ...uniquePartsRw.map(r => r.partId),
+      .from(reworkEntries)
+      .where(and(eq(reworkEntries.organizationId, organizationId), gte(reworkEntries.date, period.from), lte(reworkEntries.date, period.to)))
+      .limit(1),
     ]);
 
     const totalCount = (rejStats[0]?.count || 0) + (rwStats[0]?.count || 0);
@@ -343,9 +234,9 @@ export class AnalyticsService {
       totalIssues: totalCount,
       totalQuantity,
       avgQuantityPerIssue: totalCount > 0 ? totalQuantity / totalCount : 0,
-      uniqueCategories: uniqueZoneSet.size,
-      uniqueItems: uniquePartSet.size,
-      uniqueIssueTypes: 2, // rejection + rework
+      uniqueCategories: 0,
+      uniqueItems: 0,
+      uniqueIssueTypes: 2,
     };
   }
 
@@ -360,18 +251,16 @@ export class AnalyticsService {
 
     const [currentData, previousData] = await Promise.all([
       this.getPeriodStats(organizationId, currentFrom, now),
-      this.getPeriodStats(organizationId, previousFrom, previousTo),
+      this.getPeriodStats(organizationId, previousFrom, previousTo)
     ]);
 
-    const countChange =
-      previousData.count > 0
-        ? ((currentData.count - previousData.count) / previousData.count) * 100
-        : 0;
+    const countChange = previousData.count > 0 
+      ? ((currentData.count - previousData.count) / previousData.count) * 100 
+      : 0;
 
-    const quantityChange =
-      previousData.quantity > 0
-        ? ((currentData.quantity - previousData.quantity) / previousData.quantity) * 100
-        : 0;
+    const quantityChange = previousData.quantity > 0 
+      ? ((currentData.quantity - previousData.quantity) / previousData.quantity) * 100 
+      : 0;
 
     let trend: 'increasing' | 'decreasing' | 'stable' = 'stable';
     if (Math.abs(countChange) > 10) {
@@ -384,34 +273,24 @@ export class AnalyticsService {
       previous: previousData,
       changePercent: {
         count: countChange,
-        quantity: quantityChange,
+        quantity: quantityChange
       },
-      trend,
+      trend
     };
   }
 
   /**
-   * Get stats for a specific period — queries source tables directly
+   * Get stats for a specific period
    */
   private async getPeriodStats(organizationId: number, from: Date, to: Date) {
     const [rejResult, rwResult] = await Promise.all([
-      db
-        .select({ count: count(), quantity: sum(rejectionEntries.quantity).mapWith(Number) })
+      db.select({ count: count(), quantity: sum(rejectionEntries.quantity).mapWith(Number) })
         .from(rejectionEntries)
-        .where(and(
-          eq(rejectionEntries.organizationId, organizationId),
-          gte(rejectionEntries.date, from),
-          lte(rejectionEntries.date, to),
-        ))
+        .where(and(eq(rejectionEntries.organizationId, organizationId), gte(rejectionEntries.date, from), lte(rejectionEntries.date, to)))
         .limit(1),
-      db
-        .select({ count: count(), quantity: sum(reworkEntries.quantity).mapWith(Number) })
+      db.select({ count: count(), quantity: sum(reworkEntries.quantity).mapWith(Number) })
         .from(reworkEntries)
-        .where(and(
-          eq(reworkEntries.organizationId, organizationId),
-          gte(reworkEntries.date, from),
-          lte(reworkEntries.date, to),
-        ))
+        .where(and(eq(reworkEntries.organizationId, organizationId), gte(reworkEntries.date, from), lte(reworkEntries.date, to)))
         .limit(1),
     ]);
     return {
@@ -422,9 +301,6 @@ export class AnalyticsService {
 
   /**
    * Get top categories/zones/stations
-   *
-   * Queries source tables directly — not issueEntries — so zone data is
-   * always accurate regardless of issueEntries population state.
    */
   private async getTopCategories(organizationId: number, period: AnalyticsPeriod): Promise<TopCategory[]> {
     const LEGACY = new Set(['rejection', 'rework', '']);
@@ -433,50 +309,38 @@ export class AnalyticsService {
     const [rejRows, rwRows] = await Promise.all([
       db.select({
         zoneName: zones.name,
-        rejTypeZone: rejectionTypes.zone,
+        rejType: rejectionTypes.type,
         quantity: rejectionEntries.quantity,
       })
-        .from(rejectionEntries)
-        .leftJoin(zones, eq(rejectionEntries.zoneId, zones.id))
-        .leftJoin(rejectionTypes, eq(rejectionEntries.rejectionTypeId, rejectionTypes.id))
-        .where(and(
-          eq(rejectionEntries.organizationId, organizationId),
-          gte(rejectionEntries.date, period.from),
-          lte(rejectionEntries.date, period.to),
-        )),
+      .from(rejectionEntries)
+      .leftJoin(zones, eq(rejectionEntries.zoneId, zones.id))
+      .leftJoin(rejectionTypes, eq(rejectionEntries.rejectionTypeId, rejectionTypes.id))
+      .where(and(eq(rejectionEntries.organizationId, organizationId), gte(rejectionEntries.date, period.from), lte(rejectionEntries.date, period.to))),
 
       db.select({
         zoneName: zones.name,
-        rwTypeZone: reworkTypes.zone,
+        rwZone: reworkTypes.zone,
         quantity: reworkEntries.quantity,
       })
-        .from(reworkEntries)
-        .leftJoin(zones, eq(reworkEntries.zoneId, zones.id))
-        .leftJoin(reworkTypes, eq(reworkEntries.reworkTypeId, reworkTypes.id))
-        .where(and(
-          eq(reworkEntries.organizationId, organizationId),
-          gte(reworkEntries.date, period.from),
-          lte(reworkEntries.date, period.to),
-        )),
+      .from(reworkEntries)
+      .leftJoin(zones, eq(reworkEntries.zoneId, zones.id))
+      .leftJoin(reworkTypes, eq(reworkEntries.reworkTypeId, reworkTypes.id))
+      .where(and(eq(reworkEntries.organizationId, organizationId), gte(reworkEntries.date, period.from), lte(reworkEntries.date, period.to))),
     ]);
 
     const map = new Map<string, { count: number; quantity: number }>();
 
     for (const r of rejRows) {
-      const zone =
-        r.zoneName ??
-        (!isLegacy(r.rejTypeZone) ? r.rejTypeZone! : 'General');
+      const zone = r.zoneName ?? (!isLegacy(r.rejType) ? r.rejType! : 'General');
       const e = map.get(zone) ?? { count: 0, quantity: 0 };
-      e.count += 1;
+      e.count += r.quantity ?? 1;
       e.quantity += r.quantity ?? 0;
       map.set(zone, e);
     }
     for (const r of rwRows) {
-      const zone =
-        r.zoneName ??
-        (!isLegacy(r.rwTypeZone) ? r.rwTypeZone! : 'General');
+      const zone = r.zoneName ?? (!isLegacy(r.rwZone) ? r.rwZone! : 'General');
       const e = map.get(zone) ?? { count: 0, quantity: 0 };
-      e.count += 1;
+      e.count += r.quantity ?? 1;
       e.quantity += r.quantity ?? 0;
       map.set(zone, e);
     }
@@ -495,39 +359,31 @@ export class AnalyticsService {
   }
 
   /**
-   * Get top items/products/batches — queries source tables directly
+   * Get top items/products/batches
    */
   private async getTopItems(organizationId: number, period: AnalyticsPeriod): Promise<TopItem[]> {
     const [rejRows, rwRows] = await Promise.all([
       db.select({ partNumber: parts.partNumber, quantity: rejectionEntries.quantity })
         .from(rejectionEntries)
         .leftJoin(parts, eq(rejectionEntries.partId, parts.id))
-        .where(and(
-          eq(rejectionEntries.organizationId, organizationId),
-          gte(rejectionEntries.date, period.from),
-          lte(rejectionEntries.date, period.to),
-        )),
+        .where(and(eq(rejectionEntries.organizationId, organizationId), gte(rejectionEntries.date, period.from), lte(rejectionEntries.date, period.to))),
 
       db.select({ partNumber: parts.partNumber, quantity: reworkEntries.quantity })
         .from(reworkEntries)
         .leftJoin(parts, eq(reworkEntries.partId, parts.id))
-        .where(and(
-          eq(reworkEntries.organizationId, organizationId),
-          gte(reworkEntries.date, period.from),
-          lte(reworkEntries.date, period.to),
-        )),
+        .where(and(eq(reworkEntries.organizationId, organizationId), gte(reworkEntries.date, period.from), lte(reworkEntries.date, period.to))),
     ]);
 
     const map = new Map<string, { count: number; quantity: number }>();
     for (const r of [...rejRows, ...rwRows]) {
       const pn = r.partNumber ?? 'Unknown';
       const e = map.get(pn) ?? { count: 0, quantity: 0 };
-      e.count += 1;
+      e.count += r.quantity ?? 1;
       e.quantity += r.quantity ?? 0;
       map.set(pn, e);
     }
 
-    const total = Array.from(map.values()).reduce((s, v) => s + v.count, 0) || 1;
+    const total = Array.from(map.values()).reduce((s, v) => s + v.quantity, 0) || 1;
     return Array.from(map.entries())
       .sort((a, b) => b[1].count - a[1].count)
       .slice(0, 10)
@@ -541,180 +397,118 @@ export class AnalyticsService {
   }
 
   /**
-   * Get top issue types
-   *
-   * FIX: topCategory sub-query now joins source tables directly instead of
-   * reading issueEntries.zone (which was NULL before the insert fix).
+   * Get top issue types — returns actual rejection reasons + rework types sorted by quantity
    */
   private async getTopIssueTypes(organizationId: number, period: AnalyticsPeriod): Promise<TopIssueType[]> {
-    // Count rejections per type
-    const rejTypeCounts = await db.select({
-      typeName: rejectionTypes.type,
-      count: count(),
-      quantity: sum(rejectionEntries.quantity).mapWith(Number),
-    })
+    const [rejRows, rwRows] = await Promise.all([
+      db.select({
+        reason: rejectionTypes.reason,
+        code: rejectionTypes.rejectionCode,
+        rejReason: rejectionEntries.rejectionReason,
+        rejCode: rejectionEntries.rejectionReasonCode,
+        quantity: rejectionEntries.quantity,
+        partNumber: parts.partNumber,
+      })
       .from(rejectionEntries)
       .leftJoin(rejectionTypes, eq(rejectionEntries.rejectionTypeId, rejectionTypes.id))
-      .where(and(
-        eq(rejectionEntries.organizationId, organizationId),
-        gte(rejectionEntries.date, period.from),
-        lte(rejectionEntries.date, period.to),
-      ))
-      .groupBy(rejectionTypes.type)
-      .orderBy(desc(count()));
+      .leftJoin(parts, eq(rejectionEntries.partId, parts.id))
+      .where(and(eq(rejectionEntries.organizationId, organizationId), gte(rejectionEntries.date, period.from), lte(rejectionEntries.date, period.to))),
 
-    // Rework is always one "type"
-    const rwStats = await db.select({
-      count: count(),
-      quantity: sum(reworkEntries.quantity).mapWith(Number),
-    })
+      db.select({
+        reason: reworkTypes.reason,
+        code: reworkTypes.reworkCode,
+        quantity: reworkEntries.quantity,
+        partNumber: parts.partNumber,
+      })
       .from(reworkEntries)
-      .where(and(
-        eq(reworkEntries.organizationId, organizationId),
-        gte(reworkEntries.date, period.from),
-        lte(reworkEntries.date, period.to),
-      ))
-      .limit(1);
+      .leftJoin(reworkTypes, eq(reworkEntries.reworkTypeId, reworkTypes.id))
+      .leftJoin(parts, eq(reworkEntries.partId, parts.id))
+      .where(and(eq(reworkEntries.organizationId, organizationId), gte(reworkEntries.date, period.from), lte(reworkEntries.date, period.to))),
+    ]);
 
-    const totalIssues =
-      rejTypeCounts.reduce((s, r) => s + r.count, 0) +
-      (rwStats[0]?.count || 0);
+    // Map: reason name → { quantity, topItem }
+    const map = new Map<string, { quantity: number; partCounts: Map<string, number> }>();
 
-    const result: TopIssueType[] = [];
-
-    // Process rejection types — get top zone and top part for each
-    for (const rt of rejTypeCounts) {
-      const typeName = rt.typeName ?? 'rejection';
-
-      const [topZoneRows, topPartRows] = await Promise.all([
-        db.select({ zoneName: zones.name, cnt: count() })
-          .from(rejectionEntries)
-          .leftJoin(rejectionTypes, eq(rejectionEntries.rejectionTypeId, rejectionTypes.id))
-          .leftJoin(zones, eq(rejectionEntries.zoneId, zones.id))
-          .where(and(
-            eq(rejectionEntries.organizationId, organizationId),
-            eq(rejectionTypes.type, typeName),
-            gte(rejectionEntries.date, period.from),
-            lte(rejectionEntries.date, period.to),
-            isNotNull(zones.name),
-          ))
-          .groupBy(zones.name)
-          .orderBy(desc(count()))
-          .limit(1),
-
-        db.select({ partNumber: parts.partNumber, cnt: count() })
-          .from(rejectionEntries)
-          .leftJoin(rejectionTypes, eq(rejectionEntries.rejectionTypeId, rejectionTypes.id))
-          .leftJoin(parts, eq(rejectionEntries.partId, parts.id))
-          .where(and(
-            eq(rejectionEntries.organizationId, organizationId),
-            eq(rejectionTypes.type, typeName),
-            gte(rejectionEntries.date, period.from),
-            lte(rejectionEntries.date, period.to),
-            isNotNull(parts.partNumber),
-          ))
-          .groupBy(parts.partNumber)
-          .orderBy(desc(count()))
-          .limit(1),
-      ]);
-
-      result.push({
-        name: typeName,
-        count: rt.count,
-        quantity: rt.quantity ?? 0,
-        percentage: totalIssues > 0 ? (rt.count / totalIssues) * 100 : 0,
-        topCategory: topZoneRows[0]?.zoneName ?? 'Unknown',
-        topItem: topPartRows[0]?.partNumber ?? 'Unknown',
-      });
+    for (const r of rejRows) {
+      const name = r.reason ?? r.rejReason ?? r.code ?? r.rejCode ?? 'Unknown';
+      const e = map.get(name) ?? { quantity: 0, partCounts: new Map() };
+      e.quantity += r.quantity ?? 0;
+      if (r.partNumber) e.partCounts.set(r.partNumber, (e.partCounts.get(r.partNumber) ?? 0) + (r.quantity ?? 0));
+      map.set(name, e);
+    }
+    for (const r of rwRows) {
+      const name = r.reason ?? r.code ?? 'Unknown';
+      const e = map.get(name) ?? { quantity: 0, partCounts: new Map() };
+      e.quantity += r.quantity ?? 0;
+      if (r.partNumber) e.partCounts.set(r.partNumber, (e.partCounts.get(r.partNumber) ?? 0) + (r.quantity ?? 0));
+      map.set(name, e);
     }
 
-    // Add rework as a single type entry if it has data
-    if ((rwStats[0]?.count ?? 0) > 0) {
-      const [topZoneRows, topPartRows] = await Promise.all([
-        db.select({ zoneName: zones.name, cnt: count() })
-          .from(reworkEntries)
-          .leftJoin(zones, eq(reworkEntries.zoneId, zones.id))
-          .where(and(
-            eq(reworkEntries.organizationId, organizationId),
-            gte(reworkEntries.date, period.from),
-            lte(reworkEntries.date, period.to),
-            isNotNull(zones.name),
-          ))
-          .groupBy(zones.name)
-          .orderBy(desc(count()))
-          .limit(1),
-
-        db.select({ partNumber: parts.partNumber, cnt: count() })
-          .from(reworkEntries)
-          .leftJoin(parts, eq(reworkEntries.partId, parts.id))
-          .where(and(
-            eq(reworkEntries.organizationId, organizationId),
-            gte(reworkEntries.date, period.from),
-            lte(reworkEntries.date, period.to),
-            isNotNull(parts.partNumber),
-          ))
-          .groupBy(parts.partNumber)
-          .orderBy(desc(count()))
-          .limit(1),
-      ]);
-
-      result.push({
-        name: 'rework',
-        count: rwStats[0]?.count ?? 0,
-        quantity: rwStats[0]?.quantity ?? 0,
-        percentage: totalIssues > 0 ? ((rwStats[0]?.count ?? 0) / totalIssues) * 100 : 0,
-        topCategory: topZoneRows[0]?.zoneName ?? 'Unknown',
-        topItem: topPartRows[0]?.partNumber ?? 'Unknown',
+    const total = Array.from(map.values()).reduce((s, v) => s + v.quantity, 0) || 1;
+    return Array.from(map.entries())
+      .sort((a, b) => b[1].quantity - a[1].quantity)
+      .slice(0, 10)
+      .map(([name, { quantity, partCounts }]) => {
+        const topItem = Array.from(partCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'Unknown';
+        return {
+          name,
+          count: quantity,
+          quantity,
+          percentage: (quantity / total) * 100,
+          topCategory: 'N/A',
+          topItem,
+        };
       });
-    }
-
-    return result.sort((a, b) => b.count - a.count).slice(0, 10);
   }
 
   /**
-   * Get daily trend data — queries source tables directly (unchanged, already correct)
+   * Get daily trend data
    */
   private async getDailyTrend(organizationId: number, period: AnalyticsPeriod): Promise<DailyTrend[]> {
+    // Query directly from rejectionEntries and reworkEntries to avoid stale issueEntries cache
     const [rejRows, rwRows] = await Promise.all([
       db.select({
         date: sql<string>`DATE(${rejectionEntries.date})`,
         count: count(),
-        quantity: sum(rejectionEntries.quantity).mapWith(Number),
+        quantity: sum(rejectionEntries.quantity).mapWith(Number)
       })
-        .from(rejectionEntries)
-        .where(and(
-          eq(rejectionEntries.organizationId, organizationId),
-          gte(rejectionEntries.date, period.from),
-          lte(rejectionEntries.date, period.to),
-        ))
-        .groupBy(sql`DATE(${rejectionEntries.date})`),
+      .from(rejectionEntries)
+      .where(and(
+        eq(rejectionEntries.organizationId, organizationId),
+        gte(rejectionEntries.date, period.from),
+        lte(rejectionEntries.date, period.to)
+      ))
+      .groupBy(sql`DATE(${rejectionEntries.date})`),
 
       db.select({
         date: sql<string>`DATE(${reworkEntries.date})`,
         count: count(),
-        quantity: sum(reworkEntries.quantity).mapWith(Number),
+        quantity: sum(reworkEntries.quantity).mapWith(Number)
       })
-        .from(reworkEntries)
-        .where(and(
-          eq(reworkEntries.organizationId, organizationId),
-          gte(reworkEntries.date, period.from),
-          lte(reworkEntries.date, period.to),
-        ))
-        .groupBy(sql`DATE(${reworkEntries.date})`),
+      .from(reworkEntries)
+      .where(and(
+        eq(reworkEntries.organizationId, organizationId),
+        gte(reworkEntries.date, period.from),
+        lte(reworkEntries.date, period.to)
+      ))
+      .groupBy(sql`DATE(${reworkEntries.date})`)
     ]);
 
+    // Merge by date
     const map = new Map<string, { count: number; quantity: number }>();
     for (const r of rejRows) {
-      const e = map.get(r.date) ?? { count: 0, quantity: 0 };
+      const d = r.date;
+      const e = map.get(d) ?? { count: 0, quantity: 0 };
       e.count += r.count;
       e.quantity += r.quantity ?? 0;
-      map.set(r.date, e);
+      map.set(d, e);
     }
     for (const r of rwRows) {
-      const e = map.get(r.date) ?? { count: 0, quantity: 0 };
+      const d = r.date;
+      const e = map.get(d) ?? { count: 0, quantity: 0 };
       e.count += r.count;
       e.quantity += r.quantity ?? 0;
-      map.set(r.date, e);
+      map.set(d, e);
     }
 
     return Array.from(map.entries())
@@ -724,10 +518,6 @@ export class AnalyticsService {
 
   /**
    * Generate insight summaries
-   *
-   * FIX: "Biggest Problem Zone" now queries source tables directly instead of
-   * issueEntries.zone, which was always NULL before the insert fix and caused
-   * the card to always display "Unknown".
    */
   private async generateInsights(organizationId: number, period: AnalyticsPeriod): Promise<InsightSummary[]> {
     const insights: InsightSummary[] = [];
@@ -736,18 +526,18 @@ export class AnalyticsService {
     const topRejectionReason = await db.select({
       reason: rejectionTypes.reason,
       code: rejectionTypes.rejectionCode,
-      count: count(),
+      count: count()
     })
-      .from(rejectionEntries)
-      .leftJoin(rejectionTypes, eq(rejectionEntries.rejectionTypeId, rejectionTypes.id))
-      .where(and(
-        eq(rejectionEntries.organizationId, organizationId),
-        gte(rejectionEntries.date, period.from),
-        lte(rejectionEntries.date, period.to),
-      ))
-      .groupBy(rejectionTypes.reason, rejectionTypes.rejectionCode)
-      .orderBy(desc(count()))
-      .limit(1);
+    .from(rejectionEntries)
+    .leftJoin(rejectionTypes, eq(rejectionEntries.rejectionTypeId, rejectionTypes.id))
+    .where(and(
+      eq(rejectionEntries.organizationId, organizationId),
+      gte(rejectionEntries.date, period.from),
+      lte(rejectionEntries.date, period.to)
+    ))
+    .groupBy(rejectionTypes.reason, rejectionTypes.rejectionCode)
+    .orderBy(desc(count()))
+    .limit(1);
 
     if (topRejectionReason.length > 0) {
       insights.push({
@@ -755,26 +545,26 @@ export class AnalyticsService {
         title: 'Top Rejection Reason',
         description: `Code: ${topRejectionReason[0].code} — most frequent rejection in this period`,
         value: topRejectionReason[0].reason ?? topRejectionReason[0].code ?? 'Unknown',
-        confidence: 0.95,
+        confidence: 0.95
       });
     }
 
-    // Top rework type (reworkTypes has no `type` col — use reworkCode/reason)
+    // Top rework type
     const topReworkType = await db.select({
       reason: reworkTypes.reason,
       code: reworkTypes.reworkCode,
-      count: count(),
+      count: count()
     })
-      .from(reworkEntries)
-      .leftJoin(reworkTypes, eq(reworkEntries.reworkTypeId, reworkTypes.id))
-      .where(and(
-        eq(reworkEntries.organizationId, organizationId),
-        gte(reworkEntries.date, period.from),
-        lte(reworkEntries.date, period.to),
-      ))
-      .groupBy(reworkTypes.reason, reworkTypes.reworkCode)
-      .orderBy(desc(count()))
-      .limit(1);
+    .from(reworkEntries)
+    .leftJoin(reworkTypes, eq(reworkEntries.reworkTypeId, reworkTypes.id))
+    .where(and(
+      eq(reworkEntries.organizationId, organizationId),
+      gte(reworkEntries.date, period.from),
+      lte(reworkEntries.date, period.to)
+    ))
+    .groupBy(reworkTypes.reason, reworkTypes.reworkCode)
+    .orderBy(desc(count()))
+    .limit(1);
 
     if (topReworkType.length > 0) {
       insights.push({
@@ -782,59 +572,37 @@ export class AnalyticsService {
         title: 'Top Rework Type',
         description: `Code: ${topReworkType[0].code} — most frequent rework in this period`,
         value: topReworkType[0].reason ?? topReworkType[0].code ?? 'Unknown',
-        confidence: 0.95,
+        confidence: 0.95
       });
     }
 
-    // Biggest problem zone — query source tables directly (FIX: was using issueEntries.zone which was always NULL)
-    const [topZoneRej, topZoneRw] = await Promise.all([
-      db.select({ zoneName: zones.name, cnt: count() })
-        .from(rejectionEntries)
-        .leftJoin(zones, eq(rejectionEntries.zoneId, zones.id))
-        .where(and(
-          eq(rejectionEntries.organizationId, organizationId),
-          gte(rejectionEntries.date, period.from),
-          lte(rejectionEntries.date, period.to),
-          isNotNull(zones.name),
-        ))
-        .groupBy(zones.name)
-        .orderBy(desc(count()))
-        .limit(5),
+    // Get biggest problem zone
+    const topZone = await db.select({
+      zone: issueEntries.zone,
+      count: count()
+    })
+    .from(issueEntries)
+    .where(and(
+      eq(issueEntries.organizationId, organizationId),
+      gte(issueEntries.date, period.from),
+      lte(issueEntries.date, period.to),
+      sql`${issueEntries.zone} IS NOT NULL`
+    ))
+    .groupBy(issueEntries.zone)
+    .orderBy(desc(count()))
+    .limit(1);
 
-      db.select({ zoneName: zones.name, cnt: count() })
-        .from(reworkEntries)
-        .leftJoin(zones, eq(reworkEntries.zoneId, zones.id))
-        .where(and(
-          eq(reworkEntries.organizationId, organizationId),
-          gte(reworkEntries.date, period.from),
-          lte(reworkEntries.date, period.to),
-          isNotNull(zones.name),
-        ))
-        .groupBy(zones.name)
-        .orderBy(desc(count()))
-        .limit(5),
-    ]);
-
-    // Merge zone counts from both tables
-    const zoneMap = new Map<string, number>();
-    for (const r of [...topZoneRej, ...topZoneRw]) {
-      if (r.zoneName) {
-        zoneMap.set(r.zoneName, (zoneMap.get(r.zoneName) ?? 0) + r.cnt);
-      }
-    }
-
-    if (zoneMap.size > 0) {
-      const topZone = Array.from(zoneMap.entries()).sort((a, b) => b[1] - a[1])[0];
+    if (topZone.length > 0) {
       insights.push({
         type: 'problem_area',
         title: 'Biggest Problem Zone',
         description: 'Zone with the most issues — requires immediate attention',
-        value: topZone[0],
-        confidence: 0.85,
+        value: topZone[0].zone ?? 'Unknown',
+        confidence: 0.85
       });
     }
 
-    // Trend change
+    // Get trend change
     const trend7Days = await this.getTrendData(organizationId, 7);
     if (trend7Days.trend !== 'stable') {
       insights.push({
@@ -843,7 +611,7 @@ export class AnalyticsService {
         description: `Issues ${trend7Days.trend} compared to last week`,
         value: `${trend7Days.changePercent.count.toFixed(1)}%`,
         change: trend7Days.trend === 'increasing' ? '↑' : '↓',
-        confidence: 0.8,
+        confidence: 0.8
       });
     }
 
@@ -851,14 +619,14 @@ export class AnalyticsService {
   }
 
   /**
-   * Get field labels (manufacturing defaults)
+   * Get field labels (manufacturing defaults, no template system)
    */
   async getFieldLabels(organizationId: number): Promise<Record<string, string>> {
     return {
       zone: 'Zone',
       partNumber: 'Part Number',
       type: 'Issue Type',
-      quantity: 'Quantity',
+      quantity: 'Quantity'
     };
   }
 
