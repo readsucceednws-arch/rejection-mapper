@@ -48,6 +48,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useUser, useLogout } from "@/hooks/use-auth";
+import { AppSwitcher } from "./app-switcher";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -261,6 +262,7 @@ export function AppSidebar() {
               )}
             </div>
           )}
+          <AppSwitcher />
           <div className="flex items-center justify-between gap-2">
             <button
               className="flex-1 min-w-0 text-left hover:opacity-80 transition-opacity"
