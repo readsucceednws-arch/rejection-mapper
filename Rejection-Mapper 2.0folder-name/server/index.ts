@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import passport from "passport";
+import cors from "cors";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { setupPassport } from "./auth";
@@ -13,6 +14,12 @@ const app = express();
 const httpServer = createServer(app);
 
 app.set("trust proxy", 1);
+
+// Allow Attendance Mapper to call this API with session cookies
+app.use(cors({
+  origin: "https://attendance.aicreator.co.in",
+  credentials: true,
+}));
 
 declare module "http" {
   interface IncomingMessage {
@@ -108,7 +115,7 @@ httpServer.listen(
           maxAge: 30 * 24 * 60 * 60 * 1000,
           httpOnly: true,
           secure: process.env.NODE_ENV === "production",
-          sameSite: "lax",
+          sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
         },
       })
     );
