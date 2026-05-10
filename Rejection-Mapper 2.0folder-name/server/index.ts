@@ -15,9 +15,18 @@ const httpServer = createServer(app);
 
 app.set("trust proxy", 1);
 
-// Allow Attendance Mapper to call this API with session cookies
+// Allow Attendance Mapper (and any configured origin) to call this API with session cookies
+const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "https://attendance.aicreator.co.in")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 app.use(cors({
-  origin: "https://attendance.aicreator.co.in",
+  origin: (origin, cb) => {
+    // Allow requests with no origin (server-to-server, curl, etc.)
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    cb(new Error(`CORS: origin '${origin}' not allowed`));
+  },
   credentials: true,
 }));
 
@@ -107,7 +116,17 @@ httpServer.listen(
           tableName: "session",
           createTableIfMissing: true,
         }),
-        secret: process.env.SESSION_SECRET || "rejectmap-secret-key-change-in-prod",
+        secret: (() => {
+          const secret = process.env.SESSION_SECRET;
+          if (!secret) {
+            if (process.env.NODE_ENV === "production") {
+              console.error("[startup] FATAL: SESSION_SECRET env var is not set in production. Sessions are insecure!");
+            } else {
+              console.warn("[startup] SESSION_SECRET not set — using insecure default (dev only)");
+            }
+          }
+          return secret || "rejectmap-secret-key-change-in-prod";
+        })(),
         resave: false,
         saveUninitialized: false,
         rolling: true,
