@@ -243,6 +243,7 @@ export default function Dashboard() {
   const [rejectionSearch, setRejectionSearch] = useState("");
   const [zoneTimePreset, setZoneTimePreset] = useState<ZoneTimePreset>("all");
   const [zoneChartMode, setZoneChartMode] = useState<ZoneChartMode>("both");
+  const [zoneEntryFilter, setZoneEntryFilter] = useState<"all" | "rejection" | "rework">("all");
   
   // Part Wise Filters
   const [partWiseTopN, setPartWiseTopN] = useState<number>(10);
@@ -429,6 +430,22 @@ export default function Dashboard() {
   const effectiveMonthData = monthData && monthData.length > 0 ? monthData : fallbackMonthData;
   const effectiveCostData = mergedCostData;
   const effectiveZoneData = zoneData && zoneData.length > 0 ? zoneData : fallbackZoneData;
+
+  // Apply rejection/rework filter to zone data
+  const filteredZoneData = useMemo(() => {
+    if (!effectiveZoneData) return [];
+    if (zoneEntryFilter === "rejection") {
+      return effectiveZoneData
+        .map((row) => ({ ...row, reworks: 0, totalQuantity: row.rejections }))
+        .filter((row) => row.totalQuantity > 0);
+    }
+    if (zoneEntryFilter === "rework") {
+      return effectiveZoneData
+        .map((row) => ({ ...row, rejections: 0, totalQuantity: row.reworks }))
+        .filter((row) => row.totalQuantity > 0);
+    }
+    return effectiveZoneData;
+  }, [effectiveZoneData, zoneEntryFilter]);
 
   const isLoadingDashboardEntries = isLoadingAnalyticsRejections || isLoadingAnalyticsReworks;
   const isLoadingZoneEntries = isLoadingZoneRejections || isLoadingZoneReworks;
@@ -1589,21 +1606,36 @@ export default function Dashboard() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="grid gap-1">
+              <Label className="text-xs text-muted-foreground">Entry Type</Label>
+              <Select value={zoneEntryFilter} onValueChange={(v: "all" | "rejection" | "rework") => setZoneEntryFilter(v)}>
+                <SelectTrigger className="h-8 text-xs w-[160px]">
+                  <SelectValue placeholder="All" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="rejection">Rejections Only</SelectItem>
+                  <SelectItem value="rework">Reworks Only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </Card>
 
           {(zoneChartMode === "bar" || zoneChartMode === "both") && (
           <Card className="shadow-sm border-border/50">
             <CardHeader>
               <CardTitle>Zone Analysis (Bar)</CardTitle>
-              <CardDescription>Total rejections and reworks grouped by zone</CardDescription>
+              <CardDescription>
+                {zoneEntryFilter === "all" ? "Total rejections and reworks grouped by zone" : zoneEntryFilter === "rejection" ? "Rejections only, grouped by zone" : "Reworks only, grouped by zone"}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="h-[380px] w-full">
                 {isLoadingZone && isLoadingZoneEntries ? (
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
-                ) : effectiveZoneData && effectiveZoneData.length > 0 ? (
+                ) : filteredZoneData && filteredZoneData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={effectiveZoneData} margin={{ top: 24, right: 20, left: -10, bottom: 70 }}>
+                    <BarChart data={filteredZoneData} margin={{ top: 24, right: 20, left: -10, bottom: 70 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                       <XAxis dataKey="zone" axisLine={false} tickLine={false} height={80} interval={0} tick={<CustomXAxisTick maxLen={20} />} />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
@@ -1616,7 +1648,7 @@ export default function Dashboard() {
                       <Bar dataKey="rejections" name="rejections" stackId="a" fill={REJECTION_COLOR}
                         label={(props: any) => {
                           const { x, y, width, index } = props;
-                          const row = effectiveZoneData[index];
+                          const row = filteredZoneData[index];
                           if (!row || row.reworks > 0) return null;
                           const total = row.rejections ?? 0;
                           if (!total) return null;
@@ -1630,7 +1662,7 @@ export default function Dashboard() {
                       <Bar dataKey="reworks" name="reworks" stackId="a" fill={REWORK_COLOR} radius={[4, 4, 0, 0]}
                         label={(props: any) => {
                           const { x, y, width, index } = props;
-                          const row = effectiveZoneData[index];
+                          const row = filteredZoneData[index];
                           if (!row || row.reworks === 0) return null;
                           const total = (row.rejections ?? 0) + (row.reworks ?? 0);
                           if (!total) return null;
@@ -1656,15 +1688,17 @@ export default function Dashboard() {
             <CardHeader>
               
               <CardTitle>Zone Analysis (Line)</CardTitle>
-              <CardDescription>Line view of rejections and reworks by zone</CardDescription>
+              <CardDescription>
+                {zoneEntryFilter === "all" ? "Line view of rejections and reworks by zone" : zoneEntryFilter === "rejection" ? "Rejections only — line view by zone" : "Reworks only — line view by zone"}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="h-[380px] w-full">
                 {isLoadingZone && isLoadingZoneEntries ? (
                   <div className="h-full flex items-center justify-center text-muted-foreground">Loading chart...</div>
-                ) : effectiveZoneData && effectiveZoneData.length > 0 ? (
+                ) : filteredZoneData && filteredZoneData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={effectiveZoneData} margin={{ top: 10, right: 20, left: -10, bottom: 70 }}>
+                    <LineChart data={filteredZoneData} margin={{ top: 10, right: 20, left: -10, bottom: 70 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                       <XAxis dataKey="zone" axisLine={false} tickLine={false} height={80} interval={0} tick={<CustomXAxisTick maxLen={20} />} />
                       <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
@@ -1685,7 +1719,7 @@ export default function Dashboard() {
           </Card>
           )}
 
-          {effectiveZoneData && effectiveZoneData.length > 0 && (
+          {filteredZoneData && filteredZoneData.length > 0 && (
             <Card className="shadow-sm border-border/50">
               <CardHeader>
                 <CardTitle>Zone Summary Table</CardTitle>
@@ -1703,7 +1737,7 @@ export default function Dashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {effectiveZoneData.map((row, i) => {
+                      {filteredZoneData.map((row, i) => {
                         const isSelected = selectedZone === row.zone;
                         const drill = zoneDrilldownData.get(row.zone);
                         const topCodes = drill
@@ -1782,9 +1816,9 @@ export default function Dashboard() {
                     <tfoot>
                       <tr className="border-t-2 border-border/50 bg-muted/20">
                         <td className="py-2 pr-4 font-bold">Total</td>
-                        <td className="py-2 pr-4 text-right text-destructive font-bold">{effectiveZoneData.reduce((s, r) => s + r.rejections, 0)}</td>
-                        <td className="py-2 pr-4 text-right text-blue-500 font-bold">{effectiveZoneData.reduce((s, r) => s + r.reworks, 0)}</td>
-                        <td className="py-2 text-right font-bold text-primary">{effectiveZoneData.reduce((s, r) => s + r.totalQuantity, 0)}</td>
+                        <td className="py-2 pr-4 text-right text-destructive font-bold">{filteredZoneData.reduce((s, r) => s + r.rejections, 0)}</td>
+                        <td className="py-2 pr-4 text-right text-blue-500 font-bold">{filteredZoneData.reduce((s, r) => s + r.reworks, 0)}</td>
+                        <td className="py-2 text-right font-bold text-primary">{filteredZoneData.reduce((s, r) => s + r.totalQuantity, 0)}</td>
                       </tr>
                     </tfoot>
                   </table>
