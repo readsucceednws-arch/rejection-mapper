@@ -15,8 +15,8 @@ const httpServer = createServer(app);
 
 app.set("trust proxy", 1);
 
-// Allow Attendance Mapper (and any configured origin) to call this API with session cookies
-const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "https://attendance.aicreator.co.in")
+// Allow Attendance Mapper, RejectMap, and any configured origin to call this API with session cookies
+const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "https://aicreator.co.in,https://attendance.aicreator.co.in")
   .split(",")
   .map((o) => o.trim())
   .filter(Boolean);
