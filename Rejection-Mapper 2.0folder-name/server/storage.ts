@@ -90,7 +90,7 @@ export interface IStorage {
   // Rejection Entries
   getRejectionEntries(organizationId: number, filters?: { startDate?: string; endDate?: string; partId?: number; rejectionTypeId?: number; type?: string }): Promise<RejectionEntryResponse[]>;
   createRejectionEntry(entry: InsertRejectionEntry & { date?: Date }): Promise<RejectionEntryResponse>;
-  updateRejectionEntry(id: number, organizationId: number, data: { rejectionTypeId?: number; quantity?: number; remarks?: string | null }): Promise<RejectionEntryResponse>;
+  updateRejectionEntry(id: number, organizationId: number, data: { rejectionTypeId?: number; quantity?: number; remarks?: string | null; zoneId?: number | null }): Promise<RejectionEntryResponse>;
   findDuplicateRejectionEntry(orgId: number, date: Date, partId: number, rejectionTypeId: number, quantity: number): Promise<boolean>;
   findDuplicateReworkEntry(orgId: number, date: Date, partId: number, reworkTypeId: number, quantity: number): Promise<boolean>;
   bulkDeleteRejectionEntries(ids: number[], organizationId: number): Promise<void>;
@@ -105,7 +105,7 @@ export interface IStorage {
   // Rework Entries
   getReworkEntries(organizationId: number, filters?: { startDate?: string; endDate?: string; partId?: number; reworkTypeId?: number }): Promise<ReworkEntryResponse[]>;
   createReworkEntry(entry: InsertReworkEntry & { date?: Date }): Promise<ReworkEntryResponse>;
-  updateReworkEntry(id: number, organizationId: number, data: { reworkTypeId?: number; quantity?: number; remarks?: string | null }): Promise<ReworkEntryResponse>;
+  updateReworkEntry(id: number, organizationId: number, data: { reworkTypeId?: number; quantity?: number; remarks?: string | null; zoneId?: number | null }): Promise<ReworkEntryResponse>;
   bulkDeleteReworkEntries(ids: number[], organizationId: number): Promise<void>;
 
   // Users
@@ -314,7 +314,7 @@ export class DatabaseStorage implements IStorage {
     return withLogger;
   }
 
-  async updateRejectionEntry(id: number, organizationId: number, data: { rejectionTypeId?: number; quantity?: number; remarks?: string | null }): Promise<RejectionEntryResponse> {
+  async updateRejectionEntry(id: number, organizationId: number, data: { rejectionTypeId?: number; quantity?: number; remarks?: string | null; zoneId?: number | null }): Promise<RejectionEntryResponse> {
     const [updated] = await db.update(rejectionEntries).set(data).where(and(eq(rejectionEntries.id, id), eq(rejectionEntries.organizationId, organizationId))).returning();
     if (!updated) throw new Error("Entry not found");
     const populated = await db.query.rejectionEntries.findFirst({
@@ -391,7 +391,7 @@ export class DatabaseStorage implements IStorage {
     return withLogger;
   }
 
-  async updateReworkEntry(id: number, organizationId: number, data: { reworkTypeId?: number; quantity?: number; remarks?: string | null }): Promise<ReworkEntryResponse> {
+  async updateReworkEntry(id: number, organizationId: number, data: { reworkTypeId?: number; quantity?: number; remarks?: string | null; zoneId?: number | null }): Promise<ReworkEntryResponse> {
     const [updated] = await db.update(reworkEntries).set(data).where(and(eq(reworkEntries.id, id), eq(reworkEntries.organizationId, organizationId))).returning();
     if (!updated) throw new Error("Rework entry not found");
     const populated = await db.query.reworkEntries.findFirst({
