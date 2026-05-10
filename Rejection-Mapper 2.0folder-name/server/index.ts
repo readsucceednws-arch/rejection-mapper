@@ -21,7 +21,8 @@ const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "https://attendance.
   .map((o) => o.trim())
   .filter(Boolean);
 
-app.use(cors({
+// Only apply CORS headers to /api routes — never to static assets
+app.use("/api", cors({
   origin: (origin, cb) => {
     // Allow requests with no origin (server-to-server, curl, etc.)
     if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
