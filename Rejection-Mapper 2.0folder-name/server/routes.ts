@@ -673,6 +673,7 @@ export async function registerRoutes(
         rejectionTypeId: z.number().int().positive().optional(),
         quantity: z.number().int().positive().optional(),
         remarks: z.string().nullable().optional(),
+        zoneId: z.number().int().positive().nullable().optional(),
       }).parse(req.body);
       const updated = await storage.updateRejectionEntry(id, orgId, data);
       res.json(updated);
@@ -690,6 +691,7 @@ export async function registerRoutes(
         reworkTypeId: z.number().int().positive().optional(),
         quantity: z.number().int().positive().optional(),
         remarks: z.string().nullable().optional(),
+        zoneId: z.number().int().positive().nullable().optional(),
       }).parse(req.body);
       const updated = await storage.updateReworkEntry(id, orgId, data);
       res.json(updated);
