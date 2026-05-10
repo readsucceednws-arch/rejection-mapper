@@ -135,6 +135,7 @@ export async function migrateDb() {
         "id" serial PRIMARY KEY,
         "part_number" text NOT NULL,
         "description" text,
+        "price" double precision NOT NULL DEFAULT 0,
         "organization_id" integer REFERENCES "organizations"("id")
       );
 
@@ -204,17 +205,42 @@ export async function migrateDb() {
         "quantity" integer NOT NULL DEFAULT 1,
         "date" timestamp NOT NULL DEFAULT now(),
         "remarks" text,
-        "organization_id" integer REFERENCES "organizations"("id"),
+        "rate" double precision,
+        "amount" double precision,
+        "process" text,
+        "rejection_reason_code" text,
+        "rejection_reason" text,
+        "tags" text[],
+        "custom_fields" jsonb,
+        "organization_id" integer REFERENCES "organizations"("id") NOT NULL,
         "created_by_username" text,
         "imported_at" timestamp,
-        "entry_type" text NOT NULL
+        "entry_type" text NOT NULL DEFAULT 'rejection',
+        "original_id" integer,
+        "created_at" timestamp NOT NULL DEFAULT now(),
+        "updated_at" timestamp NOT NULL DEFAULT now()
       );
 
       CREATE TABLE IF NOT EXISTS "templates" (
-        "id" text PRIMARY KEY,
+        "id" serial PRIMARY KEY,
         "name" text NOT NULL,
+        "industry" text NOT NULL,
         "description" text,
-        "labels" jsonb NOT NULL,
+        "config" jsonb NOT NULL,
+        "sample_data" jsonb,
+        "is_public" boolean DEFAULT true,
+        "organization_id" integer REFERENCES "organizations"("id"),
+        "created_at" timestamp NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS "custom_fields" (
+        "id" serial PRIMARY KEY,
+        "name" text NOT NULL,
+        "type" text NOT NULL,
+        "required" boolean DEFAULT false,
+        "options" jsonb,
+        "default_value" text,
+        "organization_id" integer REFERENCES "organizations"("id"),
         "created_at" timestamp NOT NULL DEFAULT now()
       );
 
@@ -243,6 +269,112 @@ export async function migrateDb() {
       CREATE INDEX IF NOT EXISTS "IDX_zones_org_id" ON "zones" ("organization_id");
     `);
 
+    // ── Jira-style project management tables ──────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS "workspaces" (
+        "id" serial PRIMARY KEY,
+        "name" text NOT NULL,
+        "slug" text NOT NULL UNIQUE,
+        "organization_id" integer REFERENCES "organizations"("id"),
+        "created_at" timestamp NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS "projects" (
+        "id" serial PRIMARY KEY,
+        "name" text NOT NULL,
+        "key" text NOT NULL,
+        "description" text,
+        "color" text NOT NULL DEFAULT '#378ADD',
+        "workspace_id" integer NOT NULL REFERENCES "workspaces"("id"),
+        "created_by_id" integer REFERENCES "users"("id"),
+        "created_at" timestamp NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS "sprints" (
+        "id" serial PRIMARY KEY,
+        "name" text NOT NULL,
+        "project_id" integer NOT NULL REFERENCES "projects"("id"),
+        "start_date" timestamp,
+        "end_date" timestamp,
+        "status" text NOT NULL DEFAULT 'active',
+        "created_at" timestamp NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS "issues" (
+        "id" serial PRIMARY KEY,
+        "title" text NOT NULL,
+        "description" text,
+        "status" text NOT NULL DEFAULT 'backlog',
+        "priority" text NOT NULL DEFAULT 'medium',
+        "type" text NOT NULL DEFAULT 'task',
+        "project_id" integer NOT NULL REFERENCES "projects"("id"),
+        "sprint_id" integer REFERENCES "sprints"("id"),
+        "assignee_id" integer REFERENCES "users"("id"),
+        "reporter_id" integer REFERENCES "users"("id"),
+        "order" integer NOT NULL DEFAULT 0,
+        "due_date" timestamp,
+        "completed_at" timestamp,
+        "created_at" timestamp NOT NULL DEFAULT now(),
+        "updated_at" timestamp NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS "labels" (
+        "id" serial PRIMARY KEY,
+        "name" text NOT NULL,
+        "color" text NOT NULL DEFAULT '#378ADD',
+        "project_id" integer NOT NULL REFERENCES "projects"("id")
+      );
+
+      CREATE TABLE IF NOT EXISTS "issue_labels" (
+        "id" serial PRIMARY KEY,
+        "issue_id" integer NOT NULL REFERENCES "issues"("id"),
+        "label_id" integer NOT NULL REFERENCES "labels"("id")
+      );
+
+      CREATE TABLE IF NOT EXISTS "comments" (
+        "id" serial PRIMARY KEY,
+        "body" text NOT NULL,
+        "issue_id" integer NOT NULL REFERENCES "issues"("id"),
+        "author_id" integer NOT NULL REFERENCES "users"("id"),
+        "created_at" timestamp NOT NULL DEFAULT now(),
+        "updated_at" timestamp NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS "workspace_members" (
+        "id" serial PRIMARY KEY,
+        "workspace_id" integer NOT NULL REFERENCES "workspaces"("id"),
+        "user_id" integer NOT NULL REFERENCES "users"("id"),
+        "role" text NOT NULL DEFAULT 'member',
+        "joined_at" timestamp NOT NULL DEFAULT now()
+      );
+    `);
+
+    // ── ALTER TABLE guards: add columns missing from pre-existing DBs ──────────
+    await pool.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'parts' AND column_name = 'price'
+        ) THEN
+          ALTER TABLE "parts" ADD COLUMN "price" double precision NOT NULL DEFAULT 0;
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'rejection_types' AND column_name = 'type'
+        ) THEN
+          ALTER TABLE "rejection_types" ADD COLUMN "type" text NOT NULL DEFAULT 'rejection';
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'rejection_types' AND column_name = 'zone'
+        ) THEN
+          ALTER TABLE "rejection_types" ADD COLUMN "zone" text;
+        END IF;
+      END $$;
+    `);
+
     // Add constraints
     await pool.query(`
       DO $$
@@ -251,14 +383,6 @@ export async function migrateDb() {
           ALTER TABLE "users" ADD CONSTRAINT "users_username_unique" UNIQUE ("username");
         END IF;
       END $$;
-    `);
-
-    // Insert default templates
-    await pool.query(`
-      INSERT INTO "templates" ("id", "name", "description", "labels") VALUES 
-        ('manufacturing', 'Manufacturing', 'For manufacturing and production environments', '{"zone": "Zone", "partNumber": "Part Number", "type": "Issue Type", "quantity": "Quantity"}'),
-        ('bakery', 'Bakery', 'For bakery and food service businesses', '{"zone": "Kitchen Area", "partNumber": "Product Name", "type": "Quality Issue", "quantity": "Quantity"}')
-      ON CONFLICT ("id") DO NOTHING;
     `);
 
     console.log("[db] Database migrations completed successfully");
