@@ -75,6 +75,7 @@ import {
   Pencil,
   Sparkles,
 } from "lucide-react";
+import { useZones } from "@/hooks/use-zones";
 import type { RejectionEntryResponse, ReworkEntryResponse } from "@shared/schema";
 
 function slugify(val: string | undefined): string {
@@ -673,6 +674,7 @@ export default function RecentEntries() {
   const { data: parts } = useParts();
   const { data: rejectionTypes } = useRejectionTypes();
   const { data: reworkTypes } = useReworkTypes();
+  const { data: zones } = useZones();
 
   const createRejectionMutation = useCreateRejectionEntry();
   const createReworkMutation = useCreateReworkEntry();
@@ -1518,6 +1520,7 @@ export default function RecentEntries() {
         onClose={() => setEditingEntry(null)}
         rejectionTypes={rejectionTypes ?? []}
         reworkTypes={reworkTypes ?? []}
+        zones={zones ?? []}
         updateRejection={updateRejectionMutation}
         updateRework={updateReworkMutation}
         toast={toast}
@@ -1600,6 +1603,7 @@ function EditEntryDialog({
   onClose,
   rejectionTypes,
   reworkTypes,
+  zones,
   updateRejection,
   updateRework,
   toast,
@@ -1608,6 +1612,7 @@ function EditEntryDialog({
   onClose: () => void;
   rejectionTypes: { id: number; rejectionCode: string; reason: string }[];
   reworkTypes: { id: number; reworkCode: string; reason: string }[];
+  zones: { id: number; name: string }[];
   updateRejection: ReturnType<typeof useUpdateRejectionEntry>;
   updateRework: ReturnType<typeof useUpdateReworkEntry>;
   toast: ReturnType<typeof useToast>["toast"];
@@ -1618,6 +1623,7 @@ function EditEntryDialog({
   const [typeId, setTypeId] = useState<string>("");
   const [quantity, setQuantity] = useState<string>("");
   const [remarks, setRemarks] = useState<string>("");
+  const [zoneId, setZoneId] = useState<string>("");
 
   const prevEntry = useRef<UnifiedEntry | null>(null);
   if (entry !== prevEntry.current) {
@@ -1629,11 +1635,13 @@ function EditEntryDialog({
         setTypeId(String(d.rejectionTypeId));
         setQuantity(String(d.quantity));
         setRemarks(d.remarks ?? "");
+        setZoneId(d.zoneId ? String(d.zoneId) : "");
       } else {
         const d = entry.data as ReworkEntryResponse;
         setTypeId(String(d.reworkTypeId));
         setQuantity(String(d.quantity));
         setRemarks(d.remarks ?? "");
+        setZoneId(d.zoneId ? String(d.zoneId) : "");
       }
     }
   }
@@ -1662,6 +1670,7 @@ function EditEntryDialog({
             rejectionTypeId: parseInt(typeId),
             quantity: qty,
             remarks: remarks || null,
+            zoneId: zoneId ? parseInt(zoneId) : null,
           },
         },
         {
@@ -1686,6 +1695,7 @@ function EditEntryDialog({
             reworkTypeId: parseInt(typeId),
             quantity: qty,
             remarks: remarks || null,
+            zoneId: zoneId ? parseInt(zoneId) : null,
           },
         },
         {
@@ -1759,6 +1769,23 @@ function EditEntryDialog({
                         {rw.reworkCode} — {rw.reason}
                       </SelectItem>
                     ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Zone</label>
+            <Select value={zoneId || "__none__"} onValueChange={(v) => setZoneId(v === "__none__" ? "" : v)} data-testid="select-edit-zone">
+              <SelectTrigger data-testid="select-trigger-edit-zone">
+                <SelectValue placeholder="No zone assigned" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">— No zone —</SelectItem>
+                {zones.map((z) => (
+                  <SelectItem key={z.id} value={String(z.id)} data-testid={`option-zone-${z.id}`}>
+                    {z.name}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
