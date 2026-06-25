@@ -19,6 +19,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
   BarChart,
   Bar,
   LabelList,
@@ -46,6 +52,9 @@ import {
   CalendarRange,
   X,
   RefreshCw,
+  Check,
+  ChevronDown,
+  GitCompare,
 } from "lucide-react";
 
 const COLORS = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#ec4899", "#06b6d4"];
@@ -238,6 +247,7 @@ export default function Dashboard() {
   const [overviewTabFilters] = useState<TabFilters>({});
   const [partTabFilters, setPartTabFilters] = useState<TabFilters>({});
   const [monthTabFilters, setMonthTabFilters] = useState<TabFilters>({});
+  const [compareMonths, setCompareMonths] = useState<string[]>([]);
   const [selectedPartNumbers, setSelectedPartNumbers] = useState<string[]>([]);
   const [selectedCostPart, setSelectedCostPart] = useState<string>("all");
   const [rejectionSearch, setRejectionSearch] = useState("");
@@ -429,6 +439,29 @@ export default function Dashboard() {
   const effectivePartData = partData && partData.length > 0 ? partData : fallbackPartData;
   const effectiveMonthData = monthData && monthData.length > 0 ? monthData : fallbackMonthData;
   const effectiveCostData = mergedCostData;
+
+  // ── Monthly comparison ──
+  // Keep selected comparison months in sync with available data (drop any that no longer exist).
+  useEffect(() => {
+    const available = new Set((effectiveMonthData ?? []).map((r) => r.month));
+    setCompareMonths((prev) => {
+      const next = prev.filter((m) => available.has(m));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [effectiveMonthData]);
+
+  // Rows for the selected months, kept in chronological order (matching effectiveMonthData).
+  const comparisonData = useMemo(() => {
+    if (compareMonths.length < 2) return [];
+    const selected = new Set(compareMonths);
+    return (effectiveMonthData ?? []).filter((r) => selected.has(r.month));
+  }, [effectiveMonthData, compareMonths]);
+
+  const toggleCompareMonth = (month: string) => {
+    setCompareMonths((prev) =>
+      prev.includes(month) ? prev.filter((m) => m !== month) : [...prev, month]
+    );
+  };
   const effectiveZoneData = zoneData && zoneData.length > 0 ? zoneData : fallbackZoneData;
 
   // Apply rejection/rework filter to zone data
@@ -1326,7 +1359,164 @@ export default function Dashboard() {
 
         {/* ── TAB 4: MONTHLY TRENDS ── */}
         <TabsContent value="monthly" className="space-y-6">
-          <TabFilterBar filters={monthTabFilters} onApply={setMonthTabFilters} showTypeFilter={true} />
+          <TabFilterBar
+            filters={monthTabFilters}
+            onApply={setMonthTabFilters}
+            showTypeFilter={true}
+            extraChildren={
+              <div className="grid gap-1">
+                <Label className="text-xs text-muted-foreground">Compare Months</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-8 text-xs justify-between min-w-[180px]">
+                      <span className="flex items-center gap-1.5">
+                        <GitCompare className="w-3 h-3 opacity-70" />
+                        {compareMonths.length === 0
+                          ? "Select months…"
+                          : `${compareMonths.length} selected`}
+                      </span>
+                      <ChevronDown className="w-3 h-3 ml-2 opacity-60" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-[240px] p-2">
+                    <div className="flex items-center justify-between px-1 pb-1.5 mb-1 border-b border-border/50">
+                      <span className="text-xs font-medium text-muted-foreground">Pick 2 or more</span>
+                      {compareMonths.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setCompareMonths([])}
+                          className="text-xs text-destructive hover:underline"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    <div className="max-h-[260px] overflow-y-auto space-y-0.5">
+                      {(effectiveMonthData ?? []).length === 0 ? (
+                        <div className="px-2 py-4 text-xs text-muted-foreground text-center">No months available</div>
+                      ) : (
+                        [...(effectiveMonthData ?? [])].reverse().map((row) => {
+                          const checked = compareMonths.includes(row.month);
+                          return (
+                            <label
+                              key={row.month}
+                              className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted/60 cursor-pointer text-sm"
+                            >
+                              <Checkbox checked={checked} onCheckedChange={() => toggleCompareMonth(row.month)} />
+                              <span className="flex-1">{row.month}</span>
+                              <span className="text-xs text-muted-foreground">{row.totalQuantity}</span>
+                            </label>
+                          );
+                        })
+                      )}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            }
+          />
+
+          {/* Selected-month chips */}
+          {compareMonths.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {compareMonths.map((m) => (
+                <Badge key={m} variant="secondary" className="gap-1 text-xs font-normal">
+                  {m}
+                  <button
+                    type="button"
+                    onClick={() => toggleCompareMonth(m)}
+                    className="hover:text-destructive transition-colors"
+                    aria-label={`Remove ${m}`}
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </Badge>
+              ))}
+            </div>
+          )}
+
+          {/* ── Comparison panel (shows when 2+ months are selected) ── */}
+          {compareMonths.length === 1 && (
+            <Card className="border-border/50 bg-muted/10 shadow-sm">
+              <CardContent className="py-4 text-sm text-muted-foreground text-center">
+                Select at least one more month to see a comparison.
+              </CardContent>
+            </Card>
+          )}
+
+          {comparisonData.length >= 2 && (() => {
+            const baseline = comparisonData[0];
+            return (
+              <Card className="shadow-sm border-border/50">
+                <CardHeader>
+                  <CardTitle>Month Comparison</CardTitle>
+                  <CardDescription>
+                    Rejections and reworks side by side · changes shown relative to {baseline.month}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="h-[340px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={comparisonData} margin={{ top: 24, right: 20, left: -10, bottom: 10 }} barGap={4}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                        <XAxis dataKey="month" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+                        <Tooltip
+                          contentStyle={{ borderRadius: "8px", border: "1px solid hsl(var(--border))" }}
+                          formatter={(value, name) => [value, name === "rejections" ? "Rejections" : name === "reworks" ? "Reworks" : "Total"]}
+                        />
+                        <Legend formatter={(value) => <span className="text-xs capitalize">{value === "rejections" ? "Rejections" : value === "reworks" ? "Reworks" : "Total"}</span>} />
+                        <Bar dataKey="rejections" name="rejections" fill={REJECTION_COLOR} radius={[4, 4, 0, 0]}>
+                          <LabelList dataKey="rejections" position="top" fontSize={9} fill="hsl(var(--muted-foreground))" />
+                        </Bar>
+                        <Bar dataKey="reworks" name="reworks" fill={REWORK_COLOR} radius={[4, 4, 0, 0]}>
+                          <LabelList dataKey="reworks" position="top" fontSize={9} fill="hsl(var(--muted-foreground))" />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border/50">
+                          <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Month</th>
+                          <th className="text-right py-2 pr-4 font-medium text-destructive">Rejections</th>
+                          <th className="text-right py-2 pr-4 font-medium text-blue-500">Reworks</th>
+                          <th className="text-right py-2 pr-4 font-medium text-muted-foreground">Total</th>
+                          <th className="text-right py-2 font-medium text-muted-foreground">vs {baseline.month}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {comparisonData.map((row, i) => {
+                          const diff = row.totalQuantity - baseline.totalQuantity;
+                          const pct = baseline.totalQuantity > 0 ? (diff / baseline.totalQuantity) * 100 : 0;
+                          const isBase = i === 0;
+                          return (
+                            <tr key={row.month} className="border-b border-border/30 hover:bg-muted/30 transition-colors">
+                              <td className="py-2 pr-4 font-medium">{row.month}</td>
+                              <td className="py-2 pr-4 text-right text-destructive font-medium">{row.rejections}</td>
+                              <td className="py-2 pr-4 text-right text-blue-500 font-medium">{row.reworks}</td>
+                              <td className="py-2 pr-4 text-right font-bold">{row.totalQuantity}</td>
+                              <td className="py-2 text-right font-medium">
+                                {isBase ? (
+                                  <span className="text-muted-foreground">baseline</span>
+                                ) : (
+                                  <span className={diff > 0 ? "text-destructive" : diff < 0 ? "text-emerald-600" : "text-muted-foreground"}>
+                                    {diff > 0 ? "+" : ""}{diff} ({diff > 0 ? "+" : ""}{pct.toFixed(1)}%)
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
 
           <Card className="shadow-sm border-border/50">
             <CardHeader>
