@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueries } from "@tanstack/react-query";
 import { useUser } from "./use-auth";
 
 // Existing interfaces for backward compatibility
@@ -393,5 +393,39 @@ export function useZoneWiseAnalytics(filters: Omit<AnalyticsFilters, "type"> = {
       if (!res.ok) throw new Error("Failed to fetch zone analytics");
       return res.json();
     },
+  });
+}
+
+// ── Month comparison: fetch one dimension endpoint per selected month ──
+export interface MonthRange {
+  month: string;      // display label, e.g. "Jan 2025"
+  startDate: string;  // YYYY-MM-DD (first day of month)
+  endDate: string;    // YYYY-MM-DD (last day of month)
+}
+
+// Fetches the given analytics endpoint (e.g. "by-part" | "by-cost" | "by-zone")
+// once per month range, in parallel. Returns one query result per range, in order.
+export function useMonthComparisonData<T = unknown>(
+  endpoint: string,
+  ranges: MonthRange[],
+  type?: string,
+) {
+  return useQueries({
+    queries: ranges.map((r) => {
+      const params = new URLSearchParams();
+      params.set("startDate", r.startDate);
+      params.set("endDate", r.endDate);
+      if (type && type !== "all") params.set("type", type);
+      const qs = params.toString();
+      return {
+        queryKey: [`/api/analytics/${endpoint}`, "compare", r.startDate, r.endDate, type ?? "all"],
+        staleTime: 0,
+        queryFn: async () => {
+          const res = await fetch(`/api/analytics/${endpoint}?${qs}`, { credentials: "include" });
+          if (!res.ok) throw new Error(`Failed to fetch ${endpoint} comparison data`);
+          return res.json() as Promise<T[]>;
+        },
+      };
+    }),
   });
 }
