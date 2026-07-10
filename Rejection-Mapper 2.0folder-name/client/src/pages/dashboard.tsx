@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { useReportSummary } from "@/hooks/use-reports";
-import { usePartWiseAnalytics, useMonthWiseAnalytics, useCostAnalytics, useZoneWiseAnalytics } from "@/hooks/use-analytics";
+import { usePartWiseAnalytics, useMonthWiseAnalytics, useCostAnalytics, useZoneWiseAnalytics, useMonthComparisonData, type MonthRange } from "@/hooks/use-analytics";
 import { useRejectionEntries } from "@/hooks/use-rejection-entries";
 import { useReworkEntries } from "@/hooks/use-rework-entries";
 import { useParts } from "@/hooks/use-parts";
@@ -218,6 +218,279 @@ function TabFilterBar({
         )}
       </div>
     </Card>
+  );
+}
+
+const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Convert a month label like "Jan 2025" into a first-day/last-day date range.
+function monthLabelToRange(label: string): MonthRange | null {
+  const parts = label.trim().split(/\s+/);
+  if (parts.length < 2) return null;
+  const monthIdx = MONTH_ABBR.indexOf(parts[0]);
+  const year = parseInt(parts[1], 10);
+  if (monthIdx < 0 || Number.isNaN(year)) return null;
+  const start = new Date(year, monthIdx, 1);
+  const end = new Date(year, monthIdx + 1, 0);
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return { month: label, startDate: fmt(start), endDate: fmt(end) };
+}
+
+const inr = (n: number) => `₹${Math.round(n).toLocaleString("en-IN")}`;
+
+interface CompareMetric {
+  key: string;       // field on each row to sum
+  label: string;
+  color: string;
+  currency?: boolean;
+}
+
+// Self-contained "compare across months" block: a month multi-select plus a
+// grouped bar chart and a delta table. Fetches each selected month separately
+// from the given analytics endpoint, so it works for parts / cost / zones.
+function MonthComparisonSection({
+  availableMonths,
+  endpoint,
+  type,
+  metrics,
+  primaryKey,
+  primaryLabel,
+  primaryCurrency,
+  entityKey,
+  entityLabel,
+}: {
+  availableMonths: { month: string; totalQuantity: number }[];
+  endpoint: string;
+  type?: string;
+  metrics: CompareMetric[];
+  primaryKey: string;
+  primaryLabel: string;
+  primaryCurrency?: boolean;
+  entityKey?: string;
+  entityLabel?: string;
+}) {
+  const [selected, setSelected] = useState<string[]>([]);
+
+  useEffect(() => {
+    const avail = new Set(availableMonths.map((m) => m.month));
+    setSelected((prev) => {
+      const next = prev.filter((m) => avail.has(m));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [availableMonths]);
+
+  const toggle = (m: string) =>
+    setSelected((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]));
+
+  const ranges = useMemo(() => {
+    const sel = new Set(selected);
+    return availableMonths
+      .filter((m) => sel.has(m.month))
+      .map((m) => monthLabelToRange(m.month))
+      .filter((r): r is MonthRange => r !== null);
+  }, [availableMonths, selected]);
+
+  const results = useMonthComparisonData<Record<string, unknown>>(endpoint, ranges, type);
+  const isLoading = ranges.length >= 2 && results.some((r) => r.isLoading);
+
+  const allKeys = useMemo(
+    () => Array.from(new Set([...metrics.map((m) => m.key), primaryKey])),
+    [metrics, primaryKey]
+  );
+
+  const rows = useMemo(() => {
+    return ranges.map((r, i) => {
+      const data = (results[i]?.data as Record<string, unknown>[]) ?? [];
+      const totals: Record<string, number> = {};
+      for (const k of allKeys) totals[k] = 0;
+      let topEntity: { name: string; value: number } | null = null;
+      for (const row of data) {
+        for (const k of allKeys) totals[k] += Number(row[k]) || 0;
+        if (entityKey) {
+          const v = Number(row[primaryKey]) || 0;
+          if (!topEntity || v > topEntity.value) topEntity = { name: String(row[entityKey] ?? "—"), value: v };
+        }
+      }
+      return { month: r.month, totals, primary: totals[primaryKey] ?? 0, topEntity };
+    });
+  }, [ranges, results, allKeys, primaryKey, entityKey]);
+
+  const chartData = useMemo(() => rows.map((r) => ({ month: r.month, ...r.totals })), [rows]);
+  const baseline = rows[0];
+
+  return (
+    <>
+      <Card className="p-3 flex flex-wrap items-end gap-3 border-border/50 bg-muted/20 shadow-sm">
+        <div className="flex items-center gap-2">
+          <GitCompare className="w-4 h-4 text-muted-foreground" />
+          <span className="text-xs font-medium text-muted-foreground">Compare Months</span>
+        </div>
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">Select 2 or more months</Label>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="h-8 text-xs justify-between min-w-[180px]">
+                <span>{selected.length === 0 ? "Select months…" : `${selected.length} selected`}</span>
+                <ChevronDown className="w-3 h-3 ml-2 opacity-60" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-[240px] p-2">
+              <div className="flex items-center justify-between px-1 pb-1.5 mb-1 border-b border-border/50">
+                <span className="text-xs font-medium text-muted-foreground">Pick 2 or more</span>
+                {selected.length > 0 && (
+                  <button type="button" onClick={() => setSelected([])} className="text-xs text-destructive hover:underline">
+                    Clear
+                  </button>
+                )}
+              </div>
+              <div className="max-h-[260px] overflow-y-auto space-y-0.5">
+                {availableMonths.length === 0 ? (
+                  <div className="px-2 py-4 text-xs text-muted-foreground text-center">No months available</div>
+                ) : (
+                  [...availableMonths].reverse().map((row) => (
+                    <label
+                      key={row.month}
+                      className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted/60 cursor-pointer text-sm"
+                    >
+                      <Checkbox checked={selected.includes(row.month)} onCheckedChange={() => toggle(row.month)} />
+                      <span className="flex-1">{row.month}</span>
+                      <span className="text-xs text-muted-foreground">{row.totalQuantity}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
+        {selected.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {selected.map((m) => (
+              <Badge key={m} variant="secondary" className="gap-1 text-xs font-normal">
+                {m}
+                <button type="button" onClick={() => toggle(m)} className="hover:text-destructive transition-colors" aria-label={`Remove ${m}`}>
+                  <X className="w-3 h-3" />
+                </button>
+              </Badge>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {selected.length === 1 && (
+        <Card className="border-border/50 bg-muted/10 shadow-sm">
+          <CardContent className="py-4 text-sm text-muted-foreground text-center">
+            Select at least one more month to see a comparison.
+          </CardContent>
+        </Card>
+      )}
+
+      {ranges.length >= 2 && (
+        <Card className="shadow-sm border-border/50">
+          <CardHeader>
+            <CardTitle>Month Comparison</CardTitle>
+            <CardDescription>
+              {metrics.map((m) => m.label).join(" & ")} by month · changes shown relative to {baseline?.month}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {isLoading ? (
+              <div className="h-[300px] flex items-center justify-center text-sm text-muted-foreground">
+                Loading comparison…
+              </div>
+            ) : (
+              <>
+                <div className="h-[340px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={chartData} margin={{ top: 24, right: 20, left: 0, bottom: 10 }} barGap={4}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                      <XAxis dataKey="month" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+                      <YAxis
+                        tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
+                        axisLine={false}
+                        tickLine={false}
+                        tickFormatter={(v) => (metrics[0]?.currency ? inr(Number(v)) : String(v))}
+                      />
+                      <Tooltip
+                        contentStyle={{ borderRadius: "8px", border: "1px solid hsl(var(--border))" }}
+                        formatter={(value, name) => {
+                          const mt = metrics.find((m) => m.key === name);
+                          return [mt?.currency ? inr(Number(value)) : value, mt?.label ?? String(name)];
+                        }}
+                      />
+                      <Legend formatter={(value) => <span className="text-xs">{metrics.find((m) => m.key === value)?.label ?? value}</span>} />
+                      {metrics.map((m) => (
+                        <Bar key={m.key} dataKey={m.key} name={m.key} fill={m.color} radius={[4, 4, 0, 0]}>
+                          <LabelList
+                            dataKey={m.key}
+                            position="top"
+                            fontSize={9}
+                            fill="hsl(var(--muted-foreground))"
+                            formatter={(v: number) => (m.currency ? inr(Number(v)) : v)}
+                          />
+                        </Bar>
+                      ))}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border/50">
+                        <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Month</th>
+                        {metrics.map((m) => (
+                          <th key={m.key} className="text-right py-2 pr-4 font-medium" style={{ color: m.color }}>
+                            {m.label}
+                          </th>
+                        ))}
+                        <th className="text-right py-2 pr-4 font-medium text-muted-foreground">{primaryLabel}</th>
+                        {entityKey && <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Top {entityLabel}</th>}
+                        <th className="text-right py-2 font-medium text-muted-foreground">vs {baseline?.month}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row, i) => {
+                        const diff = row.primary - (baseline?.primary ?? 0);
+                        const pct = baseline && baseline.primary > 0 ? (diff / baseline.primary) * 100 : 0;
+                        const isBase = i === 0;
+                        return (
+                          <tr key={row.month} className="border-b border-border/30 hover:bg-muted/30 transition-colors">
+                            <td className="py-2 pr-4 font-medium">{row.month}</td>
+                            {metrics.map((m) => (
+                              <td key={m.key} className="py-2 pr-4 text-right font-medium" style={{ color: m.color }}>
+                                {m.currency ? inr(row.totals[m.key] ?? 0) : (row.totals[m.key] ?? 0)}
+                              </td>
+                            ))}
+                            <td className="py-2 pr-4 text-right font-bold">
+                              {primaryCurrency ? inr(row.primary) : row.primary}
+                            </td>
+                            {entityKey && (
+                              <td className="py-2 pr-4 text-left text-muted-foreground truncate max-w-[160px]">
+                                {row.topEntity ? `${row.topEntity.name} (${row.topEntity.value})` : "—"}
+                              </td>
+                            )}
+                            <td className="py-2 text-right font-medium">
+                              {isBase ? (
+                                <span className="text-muted-foreground">baseline</span>
+                              ) : (
+                                <span className={diff > 0 ? "text-destructive" : diff < 0 ? "text-emerald-600" : "text-muted-foreground"}>
+                                  {diff > 0 ? "+" : ""}{primaryCurrency ? inr(diff) : diff} ({diff > 0 ? "+" : ""}{pct.toFixed(1)}%)
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </>
   );
 }
 
@@ -924,7 +1197,21 @@ export default function Dashboard() {
               </div>
             }
           />
-          
+
+          <MonthComparisonSection
+            availableMonths={effectiveMonthData}
+            endpoint="by-part"
+            type={partTabFilters.type}
+            metrics={[
+              { key: "rejections", label: "Rejections", color: REJECTION_COLOR },
+              { key: "reworks", label: "Reworks", color: REWORK_COLOR },
+            ]}
+            primaryKey="totalQuantity"
+            primaryLabel="Total Qty"
+            entityKey="partNumber"
+            entityLabel="Part"
+          />
+
           {/* Part Wise Filters */}
           <Card className="p-3 flex flex-wrap items-end gap-3 border-border/50 bg-card shadow-sm">
             <div className="flex items-center gap-2">
@@ -1597,6 +1884,20 @@ export default function Dashboard() {
         {/* ── TAB 4: COST ANALYSIS ── */}
         <TabsContent value="cost" className="space-y-6">
 
+          <MonthComparisonSection
+            availableMonths={effectiveMonthData}
+            endpoint="by-cost"
+            metrics={[
+              { key: "rejectionCost", label: "Rejection Cost", color: REJECTION_COLOR, currency: true },
+              { key: "reworkCost", label: "Rework Cost", color: REWORK_COLOR, currency: true },
+            ]}
+            primaryKey="totalCost"
+            primaryLabel="Total Cost"
+            primaryCurrency
+            entityKey="partNumber"
+            entityLabel="Part"
+          />
+
           {/* Cost Wise Display Options */}
           <Card className="p-3 flex flex-wrap items-end gap-3 border-border/50 bg-card shadow-sm">
             <div className="flex items-center gap-2">
@@ -1768,6 +2069,18 @@ export default function Dashboard() {
 
         {/* ── TAB 5: ZONE ANALYSIS ── */}
         <TabsContent value="zone" className="space-y-6">
+          <MonthComparisonSection
+            availableMonths={effectiveMonthData}
+            endpoint="by-zone"
+            metrics={[
+              { key: "rejections", label: "Rejections", color: REJECTION_COLOR },
+              { key: "reworks", label: "Reworks", color: REWORK_COLOR },
+            ]}
+            primaryKey="totalQuantity"
+            primaryLabel="Total Qty"
+            entityKey="zone"
+            entityLabel="Zone"
+          />
           <Card className="p-3 flex flex-wrap items-end gap-3 border-border/50 bg-muted/20 shadow-sm">
             <div className="grid gap-1">
               <Label className="text-xs text-muted-foreground">Time Window</Label>
